@@ -53,7 +53,7 @@
 # OCR Engines
 # ============================================================================
 # MinerU - Core OCR Pipeline
-mineru[core]==2.7.6
+mineru[core]>=2.7.6
 
 # DocLayout YOLO - Layout detection model (MinerU dependency)
 doclayout-yolo>=0.0.2
@@ -63,6 +63,7 @@ ftfy>=6.1.0
 
 # PaddleOCR-VL - Document Parser (Auto language detection for 109+ languages)
 paddleocr[doc-parser]
+paddleocr[all]
 
 # Transformers - For DeepSeek OCR (已移除)
 # transformers==4.51.1
