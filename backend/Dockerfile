@@ -4,13 +4,24 @@
 #   docker build -t tianshu-backend:latest -f backend/Dockerfile .
 #
 # 运行方式:
-#   docker run --gpus all -p 8000:8000 tianshu-backend:latest
+#   docker run --gpus all -p 8080:8000 tianshu-backend:latest
 
 # ============================================================================
 # Stage 1: Base Image with CUDA Support
 # ============================================================================
-FROM nvidia/cuda:12.6.2-cudnn-runtime-ubuntu24.04 AS base
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 AS base
 
+# ✅ [关键] 替换为阿里云镜像源 (防止 apt-get 500/timeout 错误)
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources && \
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources
+
+# ✅ [关键] 配置 APT 网络防御机制
+RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99custom && \
+    echo 'Acquire::http::No-Cache "true";' >> /etc/apt/apt.conf.d/99custom && \
+    echo 'Acquire::BrokenProxy "true";' >> /etc/apt/apt.conf.d/99custom && \
+    echo 'Acquire::Retries "5";' >> /etc/apt/apt.conf.d/99custom && \
+    echo 'Acquire::http::Timeout "120";' >> /etc/apt/apt.conf.d/99custom
+    
 # 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -92,16 +103,26 @@ COPY backend/requirements.txt /tmp/requirements.txt
 # 使用 BuildKit 缓存挂载，避免重复下载大文件
 # Step 1: 安装 PaddlePaddle GPU 版本（~1.8GB，首次较慢，后续使用缓存）
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install paddlepaddle-gpu==3.2.0 \
-    -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+    pip install paddlepaddle-gpu==3.3.0 \
+    -i https://www.paddlepaddle.org.cn/packages/stable/cu130/ \
     --break-system-packages \
     --default-timeout=600 \
     --retries 5
 
-# Step 2: 安装 PyTorch (CUDA 12.6, ~2GB, 包含 torchaudio for SenseVoice/FunASR)
+# Step 1.1: 安装 vLLM (使用用户指定版本 0.15.1+)
+# ✅ 增加清华源 fallback
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch==2.6.0+cu126 torchvision==0.21.0+cu126 torchaudio==2.6.0+cu126 \
-    --index-url https://download.pytorch.org/whl/cu126 \
+    echo "Installing vLLM..." && \
+    pip install "vllm>=0.15.1" \
+    --retries 10 --timeout 120 \
+    --extra-index-url https://download.pytorch.org/whl/cu130 \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages
+
+# Step 2: 安装 PyTorch (CUDA 12.9.1, ~2GB, 包含 torchaudio for SenseVoice/FunASR)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
+    --index-url https://download.pytorch.org/whl/cu130
     --break-system-packages \
     --default-timeout=600 \
     --retries 5
@@ -127,12 +148,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Step 4: 安装 MinerU 及其依赖（允许自动解析依赖）
 RUN --mount=type=cache,target=/root/.cache/pip \
-    echo "Installing MinerU with dependencies..." && \
-    pip install mineru[core] \
+    echo "Installing MinerU Core..." && \
+    pip install "mineru[core]>=2.7.6" --no-deps \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --break-system-packages \
-    --default-timeout=600 \
-    --retries 5
+    --retries 10 --timeout 120 \
+    --break-system-packages
 
 # Step 4.5: 安装其他核心包
 RUN --mount=type=cache,target=/root/.cache/pip \
