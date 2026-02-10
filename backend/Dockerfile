@@ -122,10 +122,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages
 
-# Step 5: 安装其他核心包 (已修复 Tokenizers 冲突)
-# 变更点：
-# 1. 显式允许 tokenizers>=0.22.0 以兼容 transformers 4.57.6
-# 2. transformers 使用 ==4.57.6 保持确定性
+# Step 5: 安装其他核心包 (保持不变)
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing other core packages..." && \
     pip install paddleocr[doc-parser] \
@@ -138,9 +135,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=300 \
     --retries 5
 
-# Step 6: 确保 Albumentations 版本兼容性
+# Step 6: 确保 Albumentations 版本兼容性 (修复点)
+# [修复] 显式添加 numpy<2.0.0，防止 albumentations/scikit-image 升级 numpy 导致 numba 崩溃
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install 'albumentations>=1.3.1,<1.4.0' 'albucore>=0.0.13,<0.0.17' \
+    pip install "numpy<2.0.0" 'albumentations>=1.3.1,<1.4.0' 'albucore>=0.0.13,<0.0.17' \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages
 
