@@ -63,9 +63,6 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
 # 升级 pip
-# [修复] 添加 --ignore-installed 参数
-# 原因: Ubuntu 24.04 系统自带的 pip 是 apt 安装的，没有 RECORD 文件，无法被 pip 卸载。
-# --ignore-installed 会强制覆盖安装新版本，而不尝试卸载旧版本。
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --upgrade --ignore-installed pip setuptools wheel \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -88,8 +85,6 @@ COPY backend/requirements.txt /tmp/requirements.txt
 # ----------------------------------------------------------------------------
 
 # Step 1: 安装 vLLM (让 vLLM 自动决定 PyTorch 版本)
-# [关键] 必须指定 extra-index-url 为 CUDA 源，否则会自动安装 CPU 版 PyTorch！
-# [关键] 使用 --no-cache-dir 避免缓存了错误的 CPU 版包
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing vLLM and letting it pull PyTorch..." && \
     pip install "vllm>=0.15.1" \
@@ -122,7 +117,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages
 
-# Step 5: 安装其他核心包 (保持不变)
+# Step 5: 安装其他核心包
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing other core packages..." && \
     pip install paddleocr[doc-parser] \
@@ -136,9 +131,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --retries 5
 
 # Step 6: 确保 Albumentations 版本兼容性 (修复点)
-# [修复] 显式添加 numpy<2.0.0，防止 albumentations/scikit-image 升级 numpy 导致 numba 崩溃
+# [修复] 升级 albumentations>=1.4.11 以解决 doclayout-yolo 冲突
+# [重要] 依然保持 numpy<2.0.0，防止破坏 Numba
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "numpy<2.0.0" 'albumentations>=1.3.1,<1.4.0' 'albucore>=0.0.13,<0.0.17' \
+    pip install "numpy<2.0.0" "albumentations>=1.4.11" \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages
 
