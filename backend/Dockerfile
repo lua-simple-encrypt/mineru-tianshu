@@ -62,7 +62,7 @@ RUN apt-get update && \
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
-# 升级 pip
+# 升级 pip (修复 Ubuntu 24.04 PEP 668 问题)
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --upgrade --ignore-installed pip setuptools wheel \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -79,9 +79,6 @@ COPY backend/requirements.txt /tmp/requirements.txt
 
 # ----------------------------------------------------------------------------
 # 核心依赖安装顺序优化
-# 1. vLLM (自动拉取匹配的 PyTorch GPU 版)
-# 2. PaddlePaddle (与 PyTorch 共存)
-# 3. MinerU & 应用依赖
 # ----------------------------------------------------------------------------
 
 # Step 1: 安装 vLLM (让 vLLM 自动决定 PyTorch 版本)
@@ -130,9 +127,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=300 \
     --retries 5
 
-# Step 6: 确保 Albumentations 版本兼容性 (修复点)
-# [修复] 升级 albumentations>=1.4.11 以解决 doclayout-yolo 冲突
-# [重要] 依然保持 numpy<2.0.0，防止破坏 Numba
+# Step 6: 确保 Albumentations 版本兼容性
+# [关键] 这里必须显式再次锁定 numpy<2.0.0，因为 albumentations 可能触发 scikit-image 更新
+# 从而把 numpy 升级到 2.0，导致下一步检查依赖时崩溃
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install "numpy<2.0.0" "albumentations>=1.4.11" \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
