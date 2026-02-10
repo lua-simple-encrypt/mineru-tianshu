@@ -122,7 +122,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Step 2: 安装 PyTorch (CUDA 12.9.1, ~2GB, 包含 torchaudio for SenseVoice/FunASR)
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
-    --index-url https://download.pytorch.org/whl/cu130
+    --index-url https://download.pytorch.org/whl/cu130 \
     --break-system-packages \
     --default-timeout=600 \
     --retries 5
