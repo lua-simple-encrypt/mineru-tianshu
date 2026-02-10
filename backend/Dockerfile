@@ -63,8 +63,11 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
 # 升级 pip
+# [修复] 添加 --ignore-installed 参数
+# 原因: Ubuntu 24.04 系统自带的 pip 是 apt 安装的，没有 RECORD 文件，无法被 pip 卸载。
+# --ignore-installed 会强制覆盖安装新版本，而不尝试卸载旧版本。
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install --upgrade pip setuptools wheel \
+    python3 -m pip install --upgrade --ignore-installed pip setuptools wheel \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages \
     --default-timeout=300
