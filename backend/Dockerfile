@@ -158,7 +158,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing other core packages..." && \
     pip install paddleocr[doc-parser] \
-    transformers==4.46.3 tokenizers==0.20.3 \
+    transformers==4.57.6 tokenizers==0.20.3 \
     fastapi uvicorn litserve aiohttp \
     PyMuPDF Pillow img2pdf einops easydict addict loguru modelscope \
     minio markitdown \
@@ -176,12 +176,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=300 \
     --retries 5
 
-# Step 6: 安装 safetensors（PaddlePaddle 依赖）
+# Step 6: 安装 safetensors
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --break-system-packages \
     --default-timeout=300 \
     --retries 5 \
-    https://paddle-whl.bj.bcebos.com/nightly/cu126/safetensors/safetensors-0.6.2.dev0-cp38-abi3-linux_x86_64.whl
+    --extra-index-url https://www.paddlepaddle.org.cn/packages/nightly/cu130/ \
+    safetensors>=0.7.0
 
 # Step 7: 解析剩余依赖（使用 legacy resolver，避免回溯超时）
 RUN --mount=type=cache,target=/root/.cache/pip \
