@@ -62,7 +62,7 @@ RUN apt-get update && \
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
-# 升级 pip (修复 Ubuntu 24.04 PEP 668 问题)
+# 升级 pip (修复 Ubuntu 24.04 PEP 668)
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --upgrade --ignore-installed pip setuptools wheel \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -82,6 +82,7 @@ COPY backend/requirements.txt /tmp/requirements.txt
 # ----------------------------------------------------------------------------
 
 # Step 1: 安装 vLLM (让 vLLM 自动决定 PyTorch 版本)
+# 注意: 之前的日志显示它拉取了 torch 2.9.1+cu130，这与我们选用的 Wheel (torch2.9+cu130) 兼容
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing vLLM and letting it pull PyTorch..." && \
     pip install "vllm>=0.15.1" \
@@ -91,7 +92,23 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=600 \
     || echo "Warning: vLLM installation faced issues, proceeding to check..."
 
-# Step 2: 安装 PaddlePaddle GPU
+# Step 2: 预装构建工具 (以防其他包需要编译)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install "kiwisolver>=1.4.5" "Pillow>=11.0.0" \
+    "numpy>=1.26.0,<2.0.0" "setuptools>=75.0.0" "lxml>=5.3.0" \
+    "packaging" "ninja" "psutil" \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages
+
+# Step 3: 安装预编译的 FlashAttention Wheel
+# [重大优化] 使用 mjun0812 提供的预编译包，跳过漫长的编译过程
+# 版本: 2.8.3 | CUDA: 13.0 | Torch: 2.9 | Python: 3.12 | OS: Linux x86_64
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "Installing FlashAttention Wheel..." && \
+    pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3%2Bcu130torch2.9-cp312-cp312-linux_x86_64.whl \
+    --break-system-packages
+
+# Step 4: 安装 PaddlePaddle GPU
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing PaddlePaddle..." && \
     pip install paddlepaddle-gpu==3.3.0 \
@@ -99,22 +116,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --break-system-packages \
     --default-timeout=600
 
-# Step 3: 预装关键 Python 3.12 依赖 (构建隔离)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "kiwisolver>=1.4.5" "Pillow>=11.0.0" \
-    "numpy>=1.26.0,<2.0.0" "setuptools>=75.0.0" "lxml>=5.3.0" \
-    "packaging" "ninja" \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --break-system-packages
-
-# Step 4: 安装 MinerU 核心 (使用 --no-deps 防止它破坏 vLLM 的 PyTorch)
+# Step 5: 安装 MinerU 核心 (使用 --no-deps 防止它破坏 vLLM 的 PyTorch)
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing MinerU Core..." && \
     pip install "mineru[core]>=2.7.6" --no-deps \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages
 
-# Step 5: 安装其他核心包
+# Step 6: 安装其他核心包
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing other core packages..." && \
     pip install paddleocr[doc-parser] \
@@ -127,15 +136,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=300 \
     --retries 5
 
-# Step 6: 确保 Albumentations 版本兼容性
-# [关键] 这里必须显式再次锁定 numpy<2.0.0，因为 albumentations 可能触发 scikit-image 更新
-# 从而把 numpy 升级到 2.0，导致下一步检查依赖时崩溃
+# Step 7: 确保 Albumentations 版本兼容性
+# [关键] 保持 numpy<2.0.0，防止 albumentations 触发 scikit-image 更新导致 numpy 升级
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install "numpy<2.0.0" "albumentations>=1.4.11" \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages
 
-# Step 7: 安装剩余依赖
+# Step 8: 安装剩余依赖
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing remaining requirements..." && \
     pip install -r /tmp/requirements.txt \
@@ -145,7 +153,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # 验证安装
 RUN python -c "import torch; print(f'PyTorch: {torch.__version__} (CUDA: {torch.cuda.is_available()})')" && \
-    python -c "import paddle; print(f'Paddle: {paddle.__version__}')"
+    python -c "import flash_attn; print(f'FlashAttn: {flash_attn.__version__}')"
 
 # ============================================================================
 # Stage 3: Application
