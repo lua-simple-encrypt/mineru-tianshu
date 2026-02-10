@@ -17,7 +17,6 @@ ftfy>=6.1.0
 paddleocr>=2.8.0
 
 # Transformers & Tokenizers
-# [修复] 升级 tokenizers 以匹配 transformers 4.57.6
 transformers==4.57.6
 tokenizers>=0.22.0
 
@@ -44,9 +43,12 @@ PyMuPDF>=1.24.0
 Pillow>=11.0.0
 img2pdf>=0.5.0
 pikepdf>=9.0.0
-# [重要] 限制 albumentations 版本，并在 Dockerfile 中锁死 numpy
-albumentations>=1.3.1,<1.4.0
-albucore>=0.0.13,<0.0.17
+
+# [修复] 升级 albumentations 以匹配 doclayout-yolo 0.0.4 的要求 (>=1.4.11)
+albumentations>=1.4.11
+# 移除 albucore 的手动锁定，让 albumentations 自动拉取兼容版本
+# albucore... 
+
 kiwisolver>=1.4.5
 matplotlib>=3.9.0
 contourpy>=1.3.0
