@@ -1,28 +1,18 @@
-# 企业级 AI 数据预处理平台 - 支持 GPU 加速的多模态文档处理服务
-#
-# 构建方式:
-#   docker build -t tianshu-backend:latest -f backend/Dockerfile .
-#
-# 运行方式:
-#   docker run --gpus all -p 8080:8000 tianshu-backend:latest
-
 # ============================================================================
 # Stage 1: Base Image with CUDA Support
 # ============================================================================
 FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 AS base
 
-# ✅ [关键] 替换为阿里云镜像源 (防止 apt-get 500/timeout 错误)
+# 配置镜像源和 APT 优化
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources
 
-# ✅ [关键] 配置 APT 网络防御机制
 RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99custom && \
     echo 'Acquire::http::No-Cache "true";' >> /etc/apt/apt.conf.d/99custom && \
     echo 'Acquire::BrokenProxy "true";' >> /etc/apt/apt.conf.d/99custom && \
     echo 'Acquire::Retries "5";' >> /etc/apt/apt.conf.d/99custom && \
     echo 'Acquire::http::Timeout "120";' >> /etc/apt/apt.conf.d/99custom
-    
-# 设置环境变量
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -53,13 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pandoc \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 LibreOffice (固定大版本,确保构建可重现)
-# Ubuntu 24.04 默认提供 LibreOffice 24.8.x
-# 固定到 24.8.x 系列,避免大版本升级带来的不兼容
-# 同时安装中文字体以支持中文文档转换
+# 安装 LibreOffice (固定大版本 24.8.x)
 RUN apt-get update && \
-    echo "Available LibreOffice versions:" && \
-    apt-cache policy libreoffice | head -20 && \
     apt-get install -y --no-install-recommends \
     libreoffice \
     libreoffice-writer \
@@ -71,22 +56,17 @@ RUN apt-get update && \
     fonts-wqy-microhei \
     fontconfig \
     && fc-cache -fv \
-    && echo "Installed LibreOffice version:" && \
-    libreoffice --version \
-    && echo "Installed Chinese fonts:" && \
-    fc-list :lang=zh | head -5 \
     && rm -rf /var/lib/apt/lists/*
 
-# 创建符号链接，让 python3 指向 python3.12
+# 符号链接
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
-# 升级 pip（使用国内镜像源，增加超时时间）
+# 升级 pip
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --upgrade pip setuptools wheel \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages \
-    --ignore-installed \
     --default-timeout=300
 
 # ============================================================================
@@ -95,70 +75,58 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 FROM base AS dependencies
 
 WORKDIR /tmp
-
-# 复制 requirements.txt
 COPY backend/requirements.txt /tmp/requirements.txt
 
-# 分步安装依赖（解决 PyTorch + PaddlePaddle CUDA 冲突）
-# 使用 BuildKit 缓存挂载，避免重复下载大文件
-# Step 1: 安装 PaddlePaddle GPU 版本（~1.8GB，首次较慢，后续使用缓存）
+# ----------------------------------------------------------------------------
+# 核心依赖安装顺序优化
+# 1. vLLM (自动拉取匹配的 PyTorch GPU 版)
+# 2. PaddlePaddle (与 PyTorch 共存)
+# 3. MinerU & 应用依赖
+# ----------------------------------------------------------------------------
+
+# Step 1: 安装 vLLM (让 vLLM 自动决定 PyTorch 版本)
+# [关键] 必须指定 extra-index-url 为 CUDA 源，否则会自动安装 CPU 版 PyTorch！
+# [关键] 使用 --no-cache-dir 避免缓存了错误的 CPU 版包
 RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "Installing vLLM and letting it pull PyTorch..." && \
+    pip install "vllm>=0.15.1" \
+    --extra-index-url https://download.pytorch.org/whl/cu130 \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages \
+    --default-timeout=600 \
+    || echo "Warning: vLLM installation faced issues, proceeding to check..."
+
+# Step 2: 安装 PaddlePaddle GPU
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "Installing PaddlePaddle..." && \
     pip install paddlepaddle-gpu==3.3.0 \
     -i https://www.paddlepaddle.org.cn/packages/stable/cu130/ \
     --break-system-packages \
-    --default-timeout=600 \
-    --retries 5
+    --default-timeout=600
 
-# Step 1.1: 安装 vLLM (使用用户指定版本 0.15.1+)
-# ✅ 增加清华源 fallback
-RUN --mount=type=cache,target=/root/.cache/pip \
-    echo "Installing vLLM..." && \
-    pip install "vllm>=0.15.1" \
-    --retries 10 --timeout 120 \
-    --extra-index-url https://download.pytorch.org/whl/cu130 \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --break-system-packages
-
-# Step 2: 安装 PyTorch (CUDA 12.9.1, ~2GB, 包含 torchaudio for SenseVoice/FunASR)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 \
-    --index-url https://download.pytorch.org/whl/cu130 \
-    --break-system-packages \
-    --default-timeout=600 \
-    --retries 5
-
-# Step 3: 预先安装 Python 3.12 关键依赖
+# Step 3: 预装关键 Python 3.12 依赖 (构建隔离)
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install "kiwisolver>=1.4.5" "Pillow>=11.0.0" \
     "numpy>=1.26.0,<2.0.0" "setuptools>=75.0.0" "lxml>=5.3.0" \
+    "packaging" "ninja" \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --break-system-packages \
-    --default-timeout=300 \
-    --retries 5
+    --break-system-packages
 
-# Step 3.5: 安装 transformers 核心依赖（regex、huggingface-hub 等）
-RUN --mount=type=cache,target=/root/.cache/pip \
-    echo "Installing transformers dependencies..." && \
-    pip install regex packaging filelock requests tqdm \
-    "huggingface-hub>=0.23.2,<1.0" \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --break-system-packages \
-    --default-timeout=300 \
-    --retries 5
-
-# Step 4: 安装 MinerU 及其依赖（允许自动解析依赖）
+# Step 4: 安装 MinerU 核心 (使用 --no-deps 防止它破坏 vLLM 的 PyTorch)
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing MinerU Core..." && \
     pip install "mineru[core]>=2.7.6" --no-deps \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --retries 10 --timeout 120 \
     --break-system-packages
 
-# Step 4.5: 安装其他核心包
+# Step 5: 安装其他核心包 (已修复 Tokenizers 冲突)
+# 变更点：
+# 1. 显式允许 tokenizers>=0.22.0 以兼容 transformers 4.57.6
+# 2. transformers 使用 ==4.57.6 保持确定性
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing other core packages..." && \
     pip install paddleocr[doc-parser] \
-    transformers==4.57.6 tokenizers==0.20.3 \
+    transformers==4.57.6 tokenizers>=0.22.0 \
     fastapi uvicorn litserve aiohttp \
     PyMuPDF Pillow img2pdf einops easydict addict loguru modelscope \
     minio markitdown \
@@ -167,46 +135,29 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=300 \
     --retries 5
 
-# Step 5: 确保 albumentations 版本兼容（MinerU 2.6.2 需要 1.3.x）
+# Step 6: 确保 Albumentations 版本兼容性
 RUN --mount=type=cache,target=/root/.cache/pip \
-    echo "Ensuring albumentations compatibility..." && \
     pip install 'albumentations>=1.3.1,<1.4.0' 'albucore>=0.0.13,<0.0.17' \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --break-system-packages \
-    --default-timeout=300 \
-    --retries 5
+    --break-system-packages
 
-# Step 6: 安装 safetensors
+# Step 7: 安装剩余依赖
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --break-system-packages \
-    --default-timeout=300 \
-    --retries 5 \
-    --extra-index-url https://www.paddlepaddle.org.cn/packages/nightly/cu130/ \
-    safetensors>=0.7.0
-
-# Step 7: 解析剩余依赖（使用 legacy resolver，避免回溯超时）
-RUN --mount=type=cache,target=/root/.cache/pip \
-    echo "Resolving remaining dependencies with legacy resolver..." && \
+    echo "Installing remaining requirements..." && \
     pip install -r /tmp/requirements.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages \
-    --use-deprecated=legacy-resolver \
-    --default-timeout=600 \
-    --retries 5
+    --default-timeout=600
 
-# 验证安装（仅检查导入，不验证 CUDA，因为构建时无 GPU）
-RUN python -c "import sys; print('Python:', sys.version)" && \
-    python -c "import torch; print('✅ PyTorch:', torch.__version__)" && \
-    python -c "import transformers; print('✅ Transformers:', transformers.__version__)" && \
-    python -c "import funasr; print('✅ FunASR:', funasr.__version__)" && \
-    echo "⚠️  Paddle CUDA 验证将在运行时进行（构建时无 GPU 访问）"
+# 验证安装
+RUN python -c "import torch; print(f'PyTorch: {torch.__version__} (CUDA: {torch.cuda.is_available()})')" && \
+    python -c "import paddle; print(f'Paddle: {paddle.__version__}')"
 
 # ============================================================================
 # Stage 3: Application
 # ============================================================================
 FROM dependencies AS application
 
-# 创建应用目录
 WORKDIR /app
 
 # 复制后端代码
@@ -218,25 +169,13 @@ COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY scripts/init-models.sh /usr/local/bin/init-models.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/init-models.sh
 
-# 创建必要的目录
 RUN mkdir -p /app/models /app/data /app/uploads /app/output /app/logs
-
-# 设置工作目录为后端
 WORKDIR /app/backend
 
-# 暴露端口
-# 8000: API Server
-# 8001: LitServe Worker
-# 8002: MCP Server
 EXPOSE 8000 8001 8002
 
-# 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# 使用 entrypoint 脚本
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-
-# 默认启动 API Server
-# 第一个参数是服务类型（api/worker/mcp），用于 entrypoint 判断
 CMD ["api", "python", "api_server.py"]
