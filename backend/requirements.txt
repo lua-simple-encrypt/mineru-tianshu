@@ -1,15 +1,14 @@
 # ============================================================================
-# Core Frameworks (已在 Dockerfile 中处理，这里列出用于约束)
+# Core Frameworks & Acceleration
 # ============================================================================
 paddlepaddle-gpu==3.3.0
-# [关键] 锁定 protobuf 以兼容 Paddle 和 Transformers
 protobuf==3.20.3
+# [已移除] flash-attn (Moved to Dockerfile for prebuilt wheel installation)
 
 # ============================================================================
 # MinerU & OCR Core
 # ============================================================================
 mineru[core]>=2.7.6
-# [修复] 0.0.4 需要 albumentations>=1.4.11
 doclayout-yolo>=0.0.2
 ftfy>=6.1.0
 paddleocr>=2.8.0
@@ -17,12 +16,11 @@ paddleocr>=2.8.0
 # ============================================================================
 # Transformers & Tokenizers
 # ============================================================================
-# [修复] 匹配 transformers 4.57.6 的依赖要求
 transformers==4.57.6
 tokenizers>=0.22.0
 
 # ============================================================================
-# MinerU 缺失的依赖补全 (Missing Dependencies)
+# MinerU Missing Dependencies
 # ============================================================================
 mineru-vl-utils>=0.1.19.1,<1
 qwen-vl-utils>=0.0.14,<1
@@ -45,9 +43,8 @@ Pillow>=11.0.0
 img2pdf>=0.5.0
 pikepdf>=9.0.0
 
-# [关键修复] 解决 doclayout-yolo 冲突
+# [关键版本控制]
 albumentations>=1.4.11
-# [关键修复] 必须限制 scikit-image 版本，否则它会拉取 Numpy 2.0 导致 Numba 崩溃
 scikit-image>=0.25.0,<0.26.0
 
 kiwisolver>=1.4.5
@@ -61,12 +58,9 @@ funasr>=1.2.7
 ffmpeg-python>=0.2.0
 soundfile>=0.12.0
 imagehash>=4.3.0
-
-# [关键修复] 强制使用 headless 版本避免与 vLLM 冲突，且适合服务器环境
-# 替换原本的 opencv-python
 opencv-python-headless>=4.10.0
 
-# [关键修复] 严防 Numpy 2.0 (Numba 和 vLLM 目前都不支持 Numpy 2)
+# [关键版本控制] Numba/vLLM 兼容性
 numpy>=1.26.0,<2.0.0
 
 # ============================================================================
