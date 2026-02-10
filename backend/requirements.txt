@@ -3,7 +3,7 @@
 # ============================================================================
 paddlepaddle-gpu==3.3.0
 protobuf==3.20.3
-# [已移除] flash-attn (Moved to Dockerfile for prebuilt wheel installation)
+# FlashAttention is installed via Wheel in Dockerfile
 
 # ============================================================================
 # MinerU & OCR Core
@@ -43,8 +43,9 @@ Pillow>=11.0.0
 img2pdf>=0.5.0
 pikepdf>=9.0.0
 
-# [关键版本控制]
+# [关键版本控制] 适配 doclayout-yolo 0.0.4
 albumentations>=1.4.11
+# [关键版本控制] 防止拉取 Numpy 2.0
 scikit-image>=0.25.0,<0.26.0
 
 kiwisolver>=1.4.5
@@ -58,9 +59,10 @@ funasr>=1.2.7
 ffmpeg-python>=0.2.0
 soundfile>=0.12.0
 imagehash>=4.3.0
+# [修正] 使用标准版以配合 MinerU (系统层已安装 libgl1)
 opencv-python>=4.10.0
 
-# [关键版本控制] Numba/vLLM 兼容性
+# [关键版本控制] 严防 Numpy 2.0 (Numba/vLLM 兼容性)
 numpy>=1.26.0,<2.0.0
 
 # ============================================================================
