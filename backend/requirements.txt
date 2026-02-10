@@ -1,27 +1,28 @@
-# MinerU-Server Backend Unified Requirements
-
 # ============================================================================
-# Core Frameworks
+# Core Frameworks (已在 Dockerfile 中处理，这里列出用于约束)
 # ============================================================================
-# vllm (Installing in Dockerfile)
 paddlepaddle-gpu==3.3.0
+# [关键] 锁定 protobuf 以兼容 Paddle 和 Transformers
+protobuf==3.20.3
 
 # ============================================================================
-# OCR & Pipeline Engines
+# MinerU & OCR Core
 # ============================================================================
 mineru[core]>=2.7.6
+# [修复] 0.0.4 需要 albumentations>=1.4.11
 doclayout-yolo>=0.0.2
 ftfy>=6.1.0
-
-# PaddleOCR
 paddleocr>=2.8.0
 
+# ============================================================================
 # Transformers & Tokenizers
+# ============================================================================
+# [修复] 匹配 transformers 4.57.6 的依赖要求
 transformers==4.57.6
 tokenizers>=0.22.0
 
 # ============================================================================
-# Missing MinerU Dependencies
+# MinerU 缺失的依赖补全 (Missing Dependencies)
 # ============================================================================
 mineru-vl-utils>=0.1.19.1,<1
 qwen-vl-utils>=0.0.14,<1
@@ -44,10 +45,10 @@ Pillow>=11.0.0
 img2pdf>=0.5.0
 pikepdf>=9.0.0
 
-# [修复] 升级 albumentations 以匹配 doclayout-yolo 0.0.4 的要求 (>=1.4.11)
+# [关键修复] 解决 doclayout-yolo 冲突
 albumentations>=1.4.11
-# 移除 albucore 的手动锁定，让 albumentations 自动拉取兼容版本
-# albucore... 
+# [关键修复] 必须限制 scikit-image 版本，否则它会拉取 Numpy 2.0 导致 Numba 崩溃
+scikit-image>=0.25.0,<0.26.0
 
 kiwisolver>=1.4.5
 matplotlib>=3.9.0
@@ -59,9 +60,13 @@ contourpy>=1.3.0
 funasr>=1.2.7
 ffmpeg-python>=0.2.0
 soundfile>=0.12.0
-opencv-python>=4.10.0
 imagehash>=4.3.0
-# [重要] 严格限制 numpy 版本，防止 scikit-image 升级到 2.x 导致 numba 崩溃
+
+# [关键修复] 强制使用 headless 版本避免与 vLLM 冲突，且适合服务器环境
+# 替换原本的 opencv-python
+opencv-python-headless>=4.10.0
+
+# [关键修复] 严防 Numpy 2.0 (Numba 和 vLLM 目前都不支持 Numpy 2)
 numpy>=1.26.0,<2.0.0
 
 # ============================================================================
