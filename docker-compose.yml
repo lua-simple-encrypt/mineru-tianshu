@@ -131,14 +131,13 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      - worker
+      # [关键修正] 移除了 - worker，打破依赖循环
       - rustfs
 
   # ============================================================================
-  # LitServe GPU Worker (复用 Backend 镜像，【删除】build 块)
+  # LitServe GPU Worker (复用 Backend 镜像)
   # ============================================================================
   worker:
-    # [关键] 移除了 build: ... 部分，直接使用 backend 构建好的 image
     image: tianshu-backend:latest
     container_name: tianshu-worker
     restart: unless-stopped
@@ -209,14 +208,12 @@ services:
       - tianshu-network
     depends_on:
       - rustfs
-      # 确保 backend 先构建完镜像，虽然 Docker 现在通常能智能处理，但显式依赖更安全
-      - backend
+      - backend  # Worker 依赖 Backend (为了等待镜像构建完成)
 
   # ============================================================================
-  # MCP Server (复用 Backend 镜像，【删除】build 块)
+  # MCP Server (复用 Backend 镜像)
   # ============================================================================
   mcp-server:
-    # [关键] 移除了 build: ... 部分
     image: tianshu-backend:latest
     container_name: tianshu-mcp
     restart: unless-stopped
