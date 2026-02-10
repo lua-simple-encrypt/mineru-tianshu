@@ -36,7 +36,7 @@ class TianshuLauncher:
         accelerator="auto",
         enable_mcp=False,
         mcp_port=8002,
-        paddleocr_vl_vllm_engine_enabled=False,  # 新增paddle ocr vllm engine 配置
+        paddleocr_vl_vllm_engine_enabled=true,  # 新增paddle ocr vllm engine 配置
         paddleocr_vl_vllm_api_list=[],  # 新增paddle ocr vllm engine 配置
     ):
         self.output_dir = output_dir
