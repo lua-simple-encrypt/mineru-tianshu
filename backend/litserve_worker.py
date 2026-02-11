@@ -930,7 +930,12 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 处理文件（parse 方法需要 output_path）
-        result = self.paddleocr_vl_vllm_engine.parse(file_path, output_path=str(output_dir))
+        # [修改] 关键：解包 options，将前端传来的参数全部传递给 parse 方法
+        result = self.paddleocr_vl_vllm_engine.parse(
+            file_path, 
+            output_path=str(output_dir),
+            **options
+        )
 
         # 规范化输出（统一文件名和目录结构）
         normalize_output(output_dir, handle_method="paddleocr-vl")
@@ -1233,7 +1238,7 @@ class MinerUWorkerAPI(ls.LitAPI):
                     # 添加分页标记
                     if chunk_info:
                         markdown_parts.append(
-                            f"\n\n<!-- Pages {chunk_info['start_page']}-{chunk_info['end_page']} -->\n\n"
+                            f"\n\n\n\n"
                         )
                     markdown_parts.append(content)
 
