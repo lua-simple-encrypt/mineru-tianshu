@@ -9,8 +9,9 @@
 4. 下载 Paraformer 说话人分离模型
 5. 下载 YOLO11 水印检测模型
 6. 下载 LaMa 水印修复模型
-7. 模型验证和完整性检查
-8. 生成模型清单 manifest.json
+7. [新增] 下载 PaddleOCR-VL VLLM 模型
+8. 模型验证和完整性检查
+9. 生成模型清单 manifest.json
 
 用法:
     python download_models.py --output ./models-offline
@@ -44,6 +45,15 @@ MODELS = {
         "auto_download": True,
         "target_dir": ".paddleocr/models/",
         "description": "Will be downloaded automatically on first run (~2GB)",
+        "required": False
+    },
+    "paddleocr_vl": {
+        "name": "PaddleOCR-VL (VLLM Model)",
+        # 请根据实际情况修改 repo_id，这里使用示例 ID
+        "repo_id": "PaddlePaddle/PaddleOCR-VL-vllm", 
+        "source": "huggingface", 
+        "target_dir": "PaddleOCR-VL-vllm/",
+        "description": "Large Vision-Language Model for OCR (Used by VLLM service)",
         "required": False
     },
     "sensevoice": {
@@ -96,14 +106,19 @@ def download_from_huggingface(repo_id, target_dir, filename=None):
                 repo_id=repo_id,
                 filename=filename,
                 cache_dir=str(target_dir),
+                local_dir=str(target_dir), # 直接下载到目标目录，方便 vllm 读取
+                local_dir_use_symlinks=False,
                 resume_download=True
             )
         else:
             # 下载整个仓库
             logger.info(f"   Downloading repository: {repo_id}")
+            # 对于 VLLM 模型，建议使用 local_dir 以便获得标准文件结构
             path = snapshot_download(
                 repo_id=repo_id,
-                cache_dir=str(target_dir),
+                cache_dir=str(target_dir) if "hub" in str(target_dir) else None, # MinerU 这种 hub 结构的用 cache_dir
+                local_dir=str(target_dir) if "hub" not in str(target_dir) else None, # 其他模型直接下载到目录
+                local_dir_use_symlinks=False,
                 resume_download=True
             )
 
@@ -154,6 +169,13 @@ def verify_model_files(path, model_name):
             logger.warning(f"   ⚠️  No model files (.safetensors/.bin) found in {path}")
             return False
 
+    elif model_name == "paddleocr_vl":
+        # VLLM 模型应该包含 config.json
+        has_config = (path_obj / "config.json").exists()
+        if not has_config:
+             logger.warning(f"   ⚠️  config.json not found in {path}")
+             return False
+    
     elif model_name in ["sensevoice", "paraformer"]:
         # ModelScope 模型应该包含配置文件
         config_file = path_obj / "configuration.json"
@@ -166,7 +188,13 @@ def verify_model_files(path, model_name):
 
     elif model_name == "yolo11":
         # YOLO 模型应该是 .pt 文件
-        if not str(path).endswith(".pt"):
+        # 如果是目录，检查目录下是否有文件
+        if path_obj.is_dir():
+             pt_files = list(path_obj.rglob("*.pt"))
+             if not pt_files:
+                 logger.warning(f"   ⚠️  No .pt files found in {path}")
+                 return False
+        elif not str(path).endswith(".pt"):
             logger.warning(f"   ⚠️  Invalid YOLO model file: {path}")
             return False
 
@@ -212,6 +240,11 @@ def check_model_exists(output_path, config, name):
         # 检查 HuggingFace hub 缓存
         has_model = any(target_dir.rglob("*.safetensors")) or any(target_dir.rglob("*.bin"))
         return has_model, "Model files found" if has_model else "Model files missing"
+    
+    elif name == "paddleocr_vl":
+        # 检查 VLLM 模型关键文件
+        has_config = (target_dir / "config.json").exists()
+        return has_config, "config.json found" if has_config else "config.json missing"
 
     elif name in ["sensevoice", "paraformer"]:
         # 检查 ModelScope 模型配置文件
