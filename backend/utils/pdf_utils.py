@@ -3,15 +3,13 @@ PDF 处理工具函数
 """
 
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from loguru import logger
 
 
 def convert_pdf_to_images(pdf_path: Path, output_dir: Path, zoom: float = 2.0, dpi: Optional[int] = None) -> List[Path]:
     """
     将 PDF 所有页转换为图片
-
-    这是一个公用的工具函数，被 PaddleOCR-VL 等引擎共同使用。
 
     Args:
         pdf_path: PDF 文件路径
@@ -21,23 +19,6 @@ def convert_pdf_to_images(pdf_path: Path, output_dir: Path, zoom: float = 2.0, d
 
     Returns:
         转换后的图片路径列表
-
-    Raises:
-        RuntimeError: 如果 PyMuPDF 未安装或转换失败
-
-    Example:
-        >>> # 转换所有页
-        >>> images = convert_pdf_to_images(
-        ...     Path('document.pdf'),
-        ...     Path('output/')
-        ... )
-
-        >>> # 自定义 DPI
-        >>> images = convert_pdf_to_images(
-        ...     Path('document.pdf'),
-        ...     Path('output/'),
-        ...     dpi=300
-        ... )
     """
     try:
         import fitz  # PyMuPDF
@@ -92,111 +73,94 @@ def convert_pdf_to_images(pdf_path: Path, output_dir: Path, zoom: float = 2.0, d
 
 def get_pdf_page_count(pdf_path: Path) -> int:
     """
-    获取 PDF 页数
+    获取 PDF 文件的总页数
 
     Args:
         pdf_path: PDF 文件路径
 
     Returns:
-        页数
-
-    Raises:
-        RuntimeError: 如果无法读取 PDF
+        int: 页数
     """
     try:
-        from pypdf import PdfReader
-
-        reader = PdfReader(str(pdf_path))
-        return len(reader.pages)
-    except ImportError:
-        logger.error("❌ pypdf not installed. Install with: pip install pypdf")
-        raise RuntimeError("pypdf is required for PDF processing")
+        import fitz  # PyMuPDF
+        
+        doc = fitz.open(str(pdf_path))
+        count = len(doc)
+        doc.close()
+        return count
     except Exception as e:
-        logger.error(f"❌ Failed to read PDF: {e}")
-        raise
+        logger.error(f"❌ Failed to get PDF page count: {e}")
+        # 如果读取失败，返回 0 或抛出异常，视业务逻辑而定
+        # 这里返回 0 让上层逻辑决定如何处理（通常是不拆分）
+        return 0
 
 
 def split_pdf_file(
-    pdf_path: Path, output_dir: Path, chunk_size: int = 500, parent_task_id: str = None
-) -> List[Dict[str, any]]:
+    pdf_path: Path, 
+    output_dir: Path, 
+    chunk_size: int = 500, 
+    parent_task_id: str = ""
+) -> List[Dict[str, Any]]:
     """
-    拆分 PDF 文件为多个分片（使用 pikepdf 实现，性能优化）
+    将大 PDF 文件拆分为多个小文件
 
     Args:
-        pdf_path: PDF 文件路径
+        pdf_path: 源 PDF 路径
         output_dir: 输出目录
-        chunk_size: 每个分片的页数
-        parent_task_id: 父任务ID (用于生成文件名)
+        chunk_size: 每个分块的页数
+        parent_task_id: 父任务 ID（用于日志或命名）
 
     Returns:
-        分片信息列表，每个元素包含:
-        - path: 分片文件路径
-        - start_page: 起始页码 (1-based)
-        - end_page: 结束页码 (1-based)
-        - page_count: 分片页数
-
-    Example:
-        >>> chunks = split_pdf_file(
-        ...     Path('large.pdf'),
-        ...     Path('output/'),
-        ...     chunk_size=500
-        ... )
-        >>> # [
-        >>> #   {'path': 'output/chunk_0_500.pdf', 'start_page': 1, 'end_page': 500, 'page_count': 500},
-        >>> #   {'path': 'output/chunk_500_1000.pdf', 'start_page': 501, 'end_page': 1000, 'page_count': 500},
-        >>> #   ...
-        >>> # ]
+        List[Dict]: 分块信息列表，每个元素包含:
+            - path: 分块文件路径
+            - start_page: 起始页码 (1-based)
+            - end_page: 结束页码 (1-based)
+            - page_count: 该分块页数
     """
     try:
-        import pikepdf
+        import fitz  # PyMuPDF
 
-        # 打开 PDF（只加载元数据，不加载页面内容）
-        pdf = pikepdf.open(pdf_path)
-        total_pages = len(pdf.pages)
-
-        logger.info(f"✂️  Splitting PDF: {pdf_path.name} ({total_pages} pages)")
-        logger.info(f"   Chunk size: {chunk_size} pages")
-        logger.info("   Using pikepdf for optimized performance")
-
-        chunks = []
+        output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        doc = fitz.open(str(pdf_path))
+        total_pages = len(doc)
+        chunks = []
+
+        logger.info(f"✂️ Splitting PDF ({total_pages} pages) into chunks of {chunk_size}")
+
+        # 计算分块
         for i in range(0, total_pages, chunk_size):
+            start_page = i
             end_page = min(i + chunk_size, total_pages)
-            chunk_page_count = end_page - i
-
-            # 创建分片 PDF（引用复制，不是深拷贝）
-            chunk_pdf = pikepdf.new()
-            chunk_pdf.pages.extend(pdf.pages[i:end_page])
-
-            # 生成分片文件名
-            if parent_task_id:
-                chunk_filename = f"{parent_task_id}_chunk_{i+1}_{end_page}.pdf"
-            else:
-                chunk_filename = f"{pdf_path.stem}_chunk_{i+1}_{end_page}.pdf"
-
+            
+            # 创建新的 PDF 文档
+            new_doc = fitz.open()
+            
+            # 插入页面 (from_page 是包含的, to_page 也是包含的，fitz 使用 0-based 索引)
+            # insert_pdf 参数: from_page, to_page
+            new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page - 1)
+            
+            # 生成文件名: original_pages_1-500.pdf
+            # 注意：对外文件名使用 1-based 索引，符合人类直觉
+            chunk_filename = f"{pdf_path.stem}_pages_{start_page + 1}-{end_page}.pdf"
             chunk_path = output_dir / chunk_filename
+            
+            new_doc.save(str(chunk_path))
+            new_doc.close()
 
-            # 保存分片文件（自动压缩优化）
-            chunk_pdf.save(chunk_path)
-
-            chunk_info = {
+            chunks.append({
                 "path": str(chunk_path),
-                "start_page": i + 1,  # 1-based
-                "end_page": end_page,  # 1-based
-                "page_count": chunk_page_count,
-            }
-            chunks.append(chunk_info)
+                "start_page": start_page + 1,  # 1-based
+                "end_page": end_page,          # 1-based
+                "page_count": end_page - start_page
+            })
 
-            logger.info(f"   ✅ Created chunk {len(chunks)}: pages {i+1}-{end_page} ({chunk_page_count} pages)")
+            logger.debug(f"   Created chunk: {chunk_filename} ({end_page - start_page} pages)")
 
-        pdf.close()
-        logger.info(f"✅ Split into {len(chunks)} chunks")
+        doc.close()
         return chunks
 
-    except ImportError:
-        logger.error("❌ pikepdf not installed. Install with: pip install pikepdf")
-        raise RuntimeError("pikepdf is required for PDF splitting")
     except Exception as e:
         logger.error(f"❌ Failed to split PDF: {e}")
         raise
