@@ -1,13 +1,11 @@
 <template>
   <div>
-    <!-- 页面标题 -->
     <div class="mb-4 lg:mb-6">
       <h1 class="text-xl lg:text-2xl font-bold text-gray-900">{{ $t('task.submitTask') }}</h1>
       <p class="mt-1 text-sm text-gray-600">{{ $t('task.processingOptions') }}</p>
     </div>
 
     <div class="max-w-5xl mx-auto">
-      <!-- 文件上传 -->
       <div class="card mb-6">
         <h2 class="text-lg font-semibold text-gray-900 mb-4">{{ $t('task.selectFile') }}</h2>
         <FileUploader
@@ -18,12 +16,10 @@
         />
       </div>
 
-      <!-- 配置选项 -->
       <div class="card mb-4 lg:mb-6">
         <h2 class="text-base lg:text-lg font-semibold text-gray-900 mb-4">{{ $t('task.processingOptions') }}</h2>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-6">
-          <!-- Backend 选择 -->
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">
               {{ $t('task.backend') }}
@@ -38,8 +34,6 @@
                 <option value="pipeline">{{ $t('task.backendPipeline') }}</option>
                 <option value="paddleocr-vl">{{ $t('task.backendPaddleOCR') }}</option>
                 <option value="paddleocr-vl-vllm">{{ $t('task.backendPaddleOCRVLLM') }}</option>
-                <option value="vlm-transformers">{{ $t('task.backendVLMTransformers') }}</option>
-                <option value="vlm-vllm-engine">{{ $t('task.backendVLMEngine') }}</option>
               </optgroup>
               <optgroup :label="$t('task.groupAudioVideo')">
                 <option value="sensevoice">{{ $t('task.backendSenseVoice') }}</option>
@@ -48,33 +42,15 @@
               <optgroup :label="$t('task.groupProfessional')">
                 <option value="fasta">{{ $t('task.backendFasta') }}</option>
                 <option value="genbank">{{ $t('task.backendGenBank') }}</option>
+                <option value="markitdown">MarkItDown (Office)</option>
               </optgroup>
             </select>
-            <p v-if="config.backend === 'auto'" class="mt-1 text-xs text-gray-500">
-              {{ $t('task.backendAutoHint') }}
-            </p>
-
-            <p v-if="config.backend === 'paddleocr-vl'" class="mt-1 text-xs text-gray-500">
-              {{ $t('task.backendPaddleOCRHint') }}
-            </p>
-            <p v-if="config.backend === 'paddleocr-vl-vllm'" class="mt-1 text-xs text-gray-500">
-              {{ $t('task.backendPaddleOCRVLLMHint') }}
-            </p>
-            <p v-if="config.backend === 'sensevoice'" class="mt-1 text-xs text-gray-500">
-              {{ $t('task.backendSenseVoiceHint') }}
-            </p>
-            <p v-if="config.backend === 'video'" class="mt-1 text-xs text-gray-500">
-              {{ $t('task.backendVideoHint') }}
-            </p>
-            <p v-if="config.backend === 'fasta'" class="mt-1 text-xs text-gray-500">
-              {{ $t('task.backendFastaHint') }}
-            </p>
-            <p v-if="config.backend === 'genbank'" class="mt-1 text-xs text-gray-500">
-              {{ $t('task.backendGenBankHint') }}
-            </p>
+            
+            <p v-if="config.backend === 'auto'" class="mt-1 text-xs text-gray-500">{{ $t('task.backendAutoHint') }}</p>
+            <p v-if="config.backend === 'paddleocr-vl'" class="mt-1 text-xs text-gray-500">{{ $t('task.backendPaddleOCRHint') }}</p>
+            <p v-if="config.backend === 'paddleocr-vl-vllm'" class="mt-1 text-xs text-gray-500">{{ $t('task.backendPaddleOCRVLLMHint') }}</p>
           </div>
 
-          <!-- 语言选择 -->
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">
               {{ $t('task.language') }}
@@ -94,7 +70,6 @@
             </p>
           </div>
 
-          <!-- 解析方法 -->
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">
               {{ $t('task.method') }}
@@ -109,7 +84,6 @@
             </select>
           </div>
 
-          <!-- 优先级 -->
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-2">
               {{ $t('task.priorityLabel') }}
@@ -125,19 +99,118 @@
           </div>
         </div>
 
-        <!-- 提示信息 -->
-        <div v-if="['pipeline', 'paddleocr-vl', 'paddleocr-vl-vllm'].includes(config.backend)" class="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <p class="text-sm text-blue-800">
-            {{ $t('task.tipBothFormats', { backend: config.backend === 'pipeline' ? 'MinerU' : config.backend === 'paddleocr-vl' ? 'PaddleOCR-VL' : 'PaddleOCR-VL-VLLM' }) }}
-          </p>
+        <div v-if="config.backend === 'pipeline'" class="mt-6 space-y-3 pt-4 border-t border-gray-100">
+          <label class="flex items-center">
+            <input
+              v-model="config.formula_enable"
+              type="checkbox"
+              class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+            />
+            <span class="ml-2 text-sm text-gray-700">{{ $t('task.enableFormulaRecognition') }}</span>
+          </label>
+
+          <label class="flex items-center">
+            <input
+              v-model="config.table_enable"
+              type="checkbox"
+              class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+            />
+            <span class="ml-2 text-sm text-gray-700">{{ $t('task.enableTableRecognition') }}</span>
+          </label>
         </div>
 
-        <!-- Video 专属配置 -->
+        <div v-if="['paddleocr-vl', 'paddleocr-vl-vllm'].includes(config.backend)" class="mt-6 pt-6 border-t border-gray-200">
+          <h3 class="text-base font-semibold text-blue-900 mb-4 flex items-center">
+             PaddleOCR-VL 高级功能
+             <span class="ml-2 text-xs font-normal bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">v1.5</span>
+          </h3>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="space-y-3">
+              <h4 class="text-sm font-medium text-gray-700 border-b pb-1 mb-2">图像预处理</h4>
+              <label class="flex items-center" title="自动检测并纠正文档旋转角度">
+                <input
+                  v-model="config.use_doc_orientation_classify"
+                  type="checkbox"
+                  class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span class="ml-2 text-sm text-gray-700">方向矫正 (处理旋转文档)</span>
+              </label>
+
+              <label class="flex items-center" title="自动修复扫描件的弯曲和折痕">
+                <input
+                  v-model="config.use_doc_unwarping"
+                  type="checkbox"
+                  class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span class="ml-2 text-sm text-gray-700">扭曲矫正 (处理弯曲扫描件)</span>
+              </label>
+            </div>
+
+            <div class="space-y-3">
+              <h4 class="text-sm font-medium text-gray-700 border-b pb-1 mb-2">识别增强</h4>
+              <label class="flex items-center" title="识别并提取文档中的印章">
+                <input
+                  v-model="config.use_seal_recognition"
+                  type="checkbox"
+                  class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span class="ml-2 text-sm text-gray-700">印章识别</span>
+              </label>
+
+              <label class="flex items-center" title="识别文档中的统计图表">
+                <input
+                  v-model="config.use_chart_recognition"
+                  type="checkbox"
+                  class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span class="ml-2 text-sm text-gray-700">图表识别</span>
+              </label>
+            </div>
+
+            <div class="space-y-3 md:col-span-2">
+              <h4 class="text-sm font-medium text-gray-700 border-b pb-1 mb-2">智能排版</h4>
+              <div class="flex flex-wrap gap-4">
+                <label class="flex items-center" title="将跨页的长表格合并为一个表格">
+                  <input
+                    v-model="config.merge_tables"
+                    type="checkbox"
+                    class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span class="ml-2 text-sm text-gray-700">合并跨页表格</span>
+                </label>
+
+                <label class="flex items-center" title="智能分析并生成 H1/H2/H3 标题层级">
+                  <input
+                    v-model="config.relevel_titles"
+                    type="checkbox"
+                    class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span class="ml-2 text-sm text-gray-700">智能标题分级</span>
+                </label>
+              </div>
+            </div>
+            
+            <div class="md:col-span-2 mt-2">
+               <label class="block text-sm font-medium text-gray-700 mb-1">
+                 检测框形状模式
+               </label>
+               <select
+                 v-model="config.layout_shape_mode"
+                 class="w-full md:w-1/2 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+               >
+                 <option value="auto">自动 (Auto)</option>
+                 <option value="rect">矩形 (Rect) - 适合标准文档</option>
+                 <option value="poly">多边形 (Poly) - 适合复杂/倾斜文档</option>
+               </select>
+            </div>
+          </div>
+        </div>
+
         <div v-if="config.backend === 'video'" class="mt-6 pt-6 border-t border-gray-200">
           <h3 class="text-base font-semibold text-gray-900 mb-4">{{ $t('task.videoOptions') }}</h3>
 
           <div class="space-y-4">
-            <!-- 音频选项 -->
             <div>
               <label class="flex items-center">
                 <input
@@ -152,7 +225,6 @@
               </p>
             </div>
 
-            <!-- 关键帧OCR选项 -->
             <div class="pt-4 border-t border-gray-100">
               <label class="flex items-center">
                 <input
@@ -169,7 +241,6 @@
                 {{ $t('task.enableKeyframeOCRHint') }}
               </p>
 
-              <!-- 关键帧OCR子选项 -->
               <div v-if="config.enable_keyframe_ocr" class="ml-6 mt-3 space-y-3 pl-4 border-l-2 border-primary-200">
                 <div>
                   <label class="block text-sm font-medium text-gray-700 mb-2">
@@ -196,12 +267,10 @@
           </div>
         </div>
 
-        <!-- Audio (SenseVoice) 专属配置 -->
         <div v-if="config.backend === 'sensevoice'" class="mt-6 pt-6 border-t border-gray-200">
           <h3 class="text-base font-semibold text-gray-900 mb-4">{{ $t('task.audioOptions') }}</h3>
 
           <div class="space-y-4">
-            <!-- 说话人分离选项 -->
             <div>
               <label class="flex items-center">
                 <input
@@ -218,71 +287,13 @@
                 {{ $t('task.speakerDiarizationHint') }}
               </p>
             </div>
-
-            <!-- 说话人分离提示 -->
-            <div v-if="config.enable_speaker_diarization" class="bg-green-50 border border-green-200 rounded-lg p-3">
-              <p class="text-xs text-green-800">
-                <strong>{{ $t('task.speakerDiarizationNote') }}</strong>
-              </p>
-              <ul class="text-xs text-green-700 mt-1 ml-4 list-disc space-y-0.5">
-                <li>{{ $t('task.speakerDiarizationNoteTip1') }}</li>
-                <li>{{ $t('task.speakerDiarizationNoteTip2') }}</li>
-                <li>{{ $t('task.speakerDiarizationNoteTip3') }}</li>
-              </ul>
-            </div>
           </div>
         </div>
 
-        <!-- PaddleOCR-VL 专属配置 -->
-        <div v-if="config.backend === 'paddleocr-vl'" class="mt-6 pt-6 border-t border-gray-200">
-          <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-            <h3 class="text-sm font-semibold text-blue-900 mb-2">{{ $t('task.paddleOCREnhanced') }}</h3>
-            <ul class="text-xs text-blue-800 space-y-1">
-              <li>{{ $t('task.paddleOCRFeature1') }}</li>
-              <li>{{ $t('task.paddleOCRFeature2') }}</li>
-              <li>{{ $t('task.paddleOCRFeature3') }}</li>
-              <li>{{ $t('task.paddleOCRFeature4') }}</li>
-            </ul>
-          </div>
-
-          <div class="text-sm text-gray-600">
-            <p class="mb-2">{{ $t('task.paddleOCRTipTitle') }} <strong></strong></p>
-            <ul class="list-disc list-inside space-y-1 text-xs">
-              <li>{{ $t('task.paddleOCRTip1') }}</li>
-              <li>{{ $t('task.paddleOCRTip2') }}</li>
-              <li>{{ $t('task.paddleOCRTip3') }}</li>
-              <li>{{ $t('task.paddleOCRTip4') }}</li>
-            </ul>
-          </div>
-        </div>
-
-        <!-- 功能开关（仅 Pipeline） -->
-        <div v-if="config.backend === 'pipeline'" class="mt-6 space-y-3">
-          <label class="flex items-center">
-            <input
-              v-model="config.formula_enable"
-              type="checkbox"
-              class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
-            />
-            <span class="ml-2 text-sm text-gray-700">{{ $t('task.enableFormulaRecognition') }}</span>
-          </label>
-
-          <label class="flex items-center">
-            <input
-              v-model="config.table_enable"
-              type="checkbox"
-              class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
-            />
-            <span class="ml-2 text-sm text-gray-700">{{ $t('task.enableTableRecognition') }}</span>
-          </label>
-        </div>
-
-        <!-- 水印去除配置（PDF/图片） -->
         <div v-if="['pipeline', 'paddleocr-vl', 'paddleocr-vl-vllm'].includes(config.backend)" class="mt-6 pt-6 border-t border-gray-200">
           <h3 class="text-base font-semibold text-gray-900 mb-4">{{ $t('task.watermarkOptions') }}</h3>
 
           <div class="space-y-4">
-            <!-- 水印去除开关 -->
             <div>
               <label class="flex items-center">
                 <input
@@ -299,72 +310,10 @@
                 {{ $t('task.watermarkHint') }}
               </p>
             </div>
-
-            <!-- 高级选项 -->
-            <div v-if="config.remove_watermark" class="ml-6 mt-3 space-y-3 pl-4 border-l-2 border-purple-200">
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">
-                  {{ $t('task.watermarkConfidence') }}
-                  <span class="text-gray-500 font-normal text-xs">（{{ config.watermark_conf_threshold }}）</span>
-                </label>
-                <input
-                  v-model.number="config.watermark_conf_threshold"
-                  type="range"
-                  min="0.1"
-                  max="0.9"
-                  step="0.05"
-                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
-                />
-                <div class="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>{{ $t('task.watermarkConfidenceMore') }}</span>
-                  <span>{{ $t('task.watermarkConfidenceRecommended') }}</span>
-                  <span>{{ $t('task.watermarkConfidenceLess') }}</span>
-                </div>
-                <p class="text-xs text-gray-500 mt-1">
-                  {{ $t('task.watermarkConfidenceHint') }}
-                </p>
-              </div>
-
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">
-                  {{ $t('task.watermarkDilation') }}
-                  <span class="text-gray-500 font-normal text-xs">{{ $t('task.watermarkDilationPixels', { value: config.watermark_dilation }) }}</span>
-                </label>
-                <input
-                  v-model.number="config.watermark_dilation"
-                  type="range"
-                  min="0"
-                  max="30"
-                  step="5"
-                  class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
-                />
-                <div class="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>{{ $t('task.watermarkDilationExact') }}</span>
-                  <span>{{ $t('task.watermarkDilationRecommended') }}</span>
-                  <span>{{ $t('task.watermarkDilationExpand') }}</span>
-                </div>
-                <p class="text-xs text-gray-500 mt-1">
-                  {{ $t('task.watermarkDilationHint') }}
-                </p>
-              </div>
-            </div>
-
-            <!-- PDF 处理说明 -->
-            <div v-if="config.remove_watermark" class="bg-purple-50 border border-purple-200 rounded-lg p-3 mt-3">
-              <p class="text-xs text-purple-800">
-                <strong>{{ $t('task.watermarkPDFTitle') }}</strong>
-              </p>
-              <ul class="text-xs text-purple-700 mt-1 ml-4 list-disc space-y-0.5">
-                <li>{{ $t('task.watermarkPDFTip1') }}</li>
-                <li>{{ $t('task.watermarkPDFTip2') }}</li>
-                <li>{{ $t('task.watermarkPDFTip3') }}</li>
-              </ul>
-            </div>
           </div>
         </div>
       </div>
 
-      <!-- 错误提示 -->
       <div v-if="errorMessage" class="card bg-red-50 border-red-200 mb-6">
         <div class="flex items-start">
           <AlertCircle class="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
@@ -381,7 +330,6 @@
         </div>
       </div>
 
-      <!-- 提交按钮 -->
       <div class="flex flex-col sm:flex-row justify-end gap-2 sm:gap-3">
         <router-link to="/" class="btn btn-secondary text-center">
           {{ $t('common.cancel') }}
@@ -397,7 +345,6 @@
         </button>
       </div>
 
-      <!-- 提交进度 -->
       <div v-if="submitting || submitProgress.length > 0" class="card mt-6">
         <h3 class="text-lg font-semibold text-gray-900 mb-4">{{ $t('common.progress') }}</h3>
         <div class="space-y-2">
@@ -421,7 +368,6 @@
           </div>
         </div>
 
-        <!-- 完成后的操作 -->
         <div v-if="!submitting && submitProgress.length > 0" class="mt-4 flex justify-end gap-3">
           <button
             @click="resetForm"
@@ -474,8 +420,8 @@ interface SubmitProgress {
 const submitProgress = ref<SubmitProgress[]>([])
 
 const config = reactive({
-  backend: 'auto' as Backend,  // 默认自动选择引擎
-  lang: 'auto' as Language,  // 默认自动检测语言
+  backend: 'auto' as Backend, 
+  lang: 'auto' as Language, 
   method: 'auto' as ParseMethod,
   formula_enable: true,
   table_enable: true,
@@ -491,6 +437,15 @@ const config = reactive({
   remove_watermark: false,
   watermark_conf_threshold: 0.35,
   watermark_dilation: 10,
+  // [新增] PaddleOCR-VL 专属配置
+  use_doc_orientation_classify: false, // 默认关闭，用户手动开启
+  use_doc_unwarping: false,            // 默认关闭，用户手动开启
+  use_seal_recognition: false,
+  use_chart_recognition: false,
+  use_ocr_for_image_block: false,
+  merge_tables: true,                  // 默认开启
+  relevel_titles: true,                // 默认开启
+  layout_shape_mode: 'auto'
 })
 
 function onFilesChange(newFiles: File[]) {
