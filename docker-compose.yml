@@ -60,7 +60,48 @@ services:
       - tianshu-network
 
   # ============================================================================
-  # Backend API Server (【唯一】负责构建镜像的服务)
+  # [新增] VLLM Service (用于 PaddleOCR-VL)
+  # ============================================================================
+  vllm-service:
+    image: tianshu-backend:latest
+    container_name: tianshu-vllm
+    restart: unless-stopped
+    # 启动 VLLM API Server
+    # 请确保宿主机的 ./models/PaddleOCR-VL-vllm 目录存在且包含模型文件
+    command: >
+      python3 -m vllm.entrypoints.openai.api_server
+      --model /app/models/PaddleOCR-VL-vllm
+      --served-model-name paddleocr-vl
+      --trust-remote-code
+      --port 8000
+      --host 0.0.0.0
+      --gpu-memory-utilization 0.4
+      --max-model-len 8192
+    volumes:
+      - ./models:/app/models:rw
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Shanghai
+      # 指定 VLLM 使用的 GPU，例如使用第 0 号卡
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - tianshu-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================================================
+  # Backend API Server
   # ============================================================================
   backend:
     build:
@@ -131,17 +172,24 @@ services:
     networks:
       - tianshu-network
     depends_on:
-      # [关键修正] 移除了 - worker，打破依赖循环
       - rustfs
+      # 移除了 - worker，避免依赖循环
 
   # ============================================================================
-  # LitServe GPU Worker (复用 Backend 镜像)
+  # LitServe GPU Worker
   # ============================================================================
   worker:
     image: tianshu-backend:latest
     container_name: tianshu-worker
     restart: unless-stopped
-    command: ["worker", "python", "litserve_worker.py"]
+    # [修改] 更新启动命令，传入 VLLM 参数
+    command: 
+      - "worker"
+      - "python"
+      - "litserve_worker.py"
+      - "--paddleocr-vl-vllm-engine-enabled"
+      - "--paddleocr-vl-vllm-api-list"
+      - "['http://vllm-service:8000/v1']"
     ports:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
@@ -208,10 +256,11 @@ services:
       - tianshu-network
     depends_on:
       - rustfs
-      - backend  # Worker 依赖 Backend (为了等待镜像构建完成)
+      - backend
+      - vllm-service # [新增] 依赖 vllm-service
 
   # ============================================================================
-  # MCP Server (复用 Backend 镜像)
+  # MCP Server
   # ============================================================================
   mcp-server:
     image: tianshu-backend:latest
