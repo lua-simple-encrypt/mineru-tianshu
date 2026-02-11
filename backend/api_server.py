@@ -8,20 +8,21 @@ MinerU Tianshu - API Server
 企业级认证授权: JWT Token + API Key + SSO
 """
 
-import json
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Depends
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
+from loguru import logger
+import uvicorn
+from typing import Optional
+from datetime import datetime
 import os
 import re
 import uuid
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
 from urllib.parse import quote
+from minio import Minio
 
-import uvicorn
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from loguru import logger
+from task_db import TaskDB
 
 # 导入认证模块
 from auth import (
@@ -30,9 +31,8 @@ from auth import (
     get_current_active_user,
     require_permission,
 )
-from auth.auth_db import AuthDB
 from auth.routes import router as auth_router
-from task_db import TaskDB
+from auth.auth_db import AuthDB
 
 # 初始化 FastAPI 应用
 app = FastAPI(
@@ -51,9 +51,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 获取项目根目录（backend 的父目录）
-PROJECT_ROOT = Path(__file__).parent.parent
-
 # 初始化数据库
 # 确保使用环境变量中的数据库路径（与 Worker 保持一致）
 db_path_env = os.getenv("DATABASE_PATH")
@@ -63,12 +60,8 @@ if db_path_env:
     db = TaskDB(db_path)
 else:
     logger.warning("⚠️  DATABASE_PATH not set in API Server, using default")
-    # Docker 环境: /app/data/db/mineru_tianshu.db
-    # 本地环境: ./data/db/mineru_tianshu.db
-    default_db_path = PROJECT_ROOT / "data" / "db" / "mineru_tianshu.db"
-    default_db_path.parent.mkdir(parents=True, exist_ok=True)
-    db_path = str(default_db_path.resolve())
-    logger.info(f"📊 Using default database path: {db_path}")
+    # 使用与 Worker 一致的默认路径
+    db_path = "/app/data/db/mineru_tianshu.db"
     db = TaskDB(db_path)
 auth_db = AuthDB()
 
@@ -76,93 +69,157 @@ auth_db = AuthDB()
 app.include_router(auth_router)
 
 # 配置输出目录（使用共享目录，Docker 环境可访问）
-output_path_env = os.getenv("OUTPUT_PATH")
-if output_path_env:
-    OUTPUT_DIR = Path(output_path_env)
-else:
-    # Docker 环境: /app/output
-    # 本地环境: ./data/output
-    OUTPUT_DIR = PROJECT_ROOT / "data" / "output"
+OUTPUT_DIR = Path(os.getenv("OUTPUT_PATH", "/app/output"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-logger.info(f"📁 Output directory: {OUTPUT_DIR.resolve()}")
+
+# MinIO 配置
+MINIO_CONFIG = {
+    "endpoint": os.getenv("MINIO_ENDPOINT", ""),
+    "access_key": os.getenv("MINIO_ACCESS_KEY", ""),
+    "secret_key": os.getenv("MINIO_SECRET_KEY", ""),
+    "secure": True,
+    "bucket_name": os.getenv("MINIO_BUCKET", ""),
+}
 
 
-# 注意：此函数已废弃，Worker 已自动上传图片到 RustFS 并替换 URL
-# 保留此函数仅用于向后兼容（处理旧任务或 RustFS 失败的情况）
-def process_markdown_images_legacy(md_content: str, image_dir: Path, result_path: str):
+def get_minio_client():
+    """获取MinIO客户端实例"""
+    return Minio(
+        MINIO_CONFIG["endpoint"],
+        access_key=MINIO_CONFIG["access_key"],
+        secret_key=MINIO_CONFIG["secret_key"],
+        secure=MINIO_CONFIG["secure"],
+    )
+
+
+def process_markdown_images(md_content: str, image_dir: Path, result_path: str, upload_images: bool = False):
     """
-    【已废弃】处理 Markdown 中的图片引用
+    处理 Markdown 中的图片引用
 
-    Worker 已自动上传图片到 RustFS 并替换 URL，此函数仅用于向后兼容。
-    如果检测到图片路径不是 URL，则转换为本地静态文件服务 URL。
+    将相对路径转换为可访问的 URL（静态文件服务或 MinIO）
+    支持两种格式：
+    1. Markdown 语法：![alt](path)
+    2. HTML 标签：<img src="path" ...>
 
     Args:
         md_content: Markdown 内容
-        image_dir: 图片所在目录
-        result_path: 任务结果路径
+        image_dir: 图片所在目录（绝对路径，Worker 已规范化为 images/）
+        result_path: 任务结果路径（从数据库获取，例如: /app/output/{file_stem}）
+        upload_images: 是否上传图片到 MinIO 并替换链接
 
     Returns:
         处理后的 Markdown 内容
     """
-    # 检查是否已经包含 RustFS URL
-    if "http://" in md_content or "https://" in md_content:
-        logger.debug("✅ Markdown already contains URLs (RustFS uploaded)")
-        return md_content
 
-    # 如果没有图片目录，直接返回
-    if not image_dir.exists():
-        logger.debug("ℹ️  No images directory, skipping processing")
-        return md_content
+    def process_image_path(image_path: str, alt_text: str = "Image") -> tuple[str, str]:
+        """
+        处理图片路径，返回 (新路径, 格式类型)
 
-    # 兼容模式：转换相对路径为本地 URL
-    logger.warning("⚠️  Images not uploaded to RustFS, using local URLs (legacy mode)")
+        Returns:
+            (new_url, format_type)  format_type: 'markdown' 或 'html'
+        """
+        # 提取图片文件名
+        image_filename = Path(image_path).name
 
-    def replace_image_path(match):
-        """替换图片路径为本地 URL"""
-        full_match = match.group(0)
-        # 提取图片路径（Markdown 或 HTML）
-        if "![" in full_match:
-            # Markdown: ![alt](path)
-            image_path = match.group(2)
-            alt_text = match.group(1)
-        else:
-            # HTML: <img src="path">
-            image_path = match.group(2)
-            alt_text = "Image"
+        # 构建完整的本地图片路径
+        full_image_path = image_dir / image_filename
 
-        # 如果已经是 URL，跳过
-        if image_path.startswith("http"):
-            return full_match
+        logger.debug(f"🔍 Processing image: {image_path} -> {full_image_path}")
 
-        # 生成本地静态文件 URL
+        if not full_image_path.exists():
+            logger.warning(f"⚠️  Image not found: {full_image_path}")
+            return None, None
+
+        # 如果需要上传到 MinIO
+        if upload_images:
+            try:
+                minio_client = get_minio_client()
+                bucket_name = MINIO_CONFIG["bucket_name"]
+                minio_endpoint = MINIO_CONFIG["endpoint"]
+
+                # 获取文件后缀
+                file_extension = full_image_path.suffix
+                # 生成 UUID 作为新文件名
+                new_filename = f"{uuid.uuid4()}{file_extension}"
+
+                # 上传到 MinIO
+                object_name = f"images/{new_filename}"
+                minio_client.fput_object(bucket_name, object_name, str(full_image_path))
+
+                # 生成 MinIO 访问 URL
+                scheme = "https" if MINIO_CONFIG["secure"] else "http"
+                minio_url = f"{scheme}://{minio_endpoint}/{bucket_name}/{object_name}"
+
+                logger.info(f"✅ Uploaded to MinIO: {object_name}")
+                return minio_url, "html"
+            except Exception as e:
+                logger.error(f"❌ Failed to upload image to MinIO: {e}")
+                # 上传失败，继续使用本地静态文件服务
+
+        # 使用本地静态文件服务
+        # result_path 格式: /app/output/{file_stem}
+        # Worker 已规范化图片目录为: images/
+        # 需要转换为: /api/v1/files/output/{file_stem}/images/xxx.jpg
         try:
-            image_filename = Path(image_path).name
-            output_dir_str = str(OUTPUT_DIR).replace("\\", "/")
+            # 直接使用字符串替换，避免 Path 对象的编码问题
+            output_dir_str = str(OUTPUT_DIR).replace("\\", "/")  # 统一使用正斜杠
             result_path_str = result_path.replace("\\", "/")
 
             if result_path_str.startswith(output_dir_str):
+                # 提取相对路径
                 relative_path = result_path_str[len(output_dir_str) :].lstrip("/")
+                # 对路径进行 URL 编码（safe='/' 保留斜杠）
                 encoded_relative_path = quote(relative_path, safe="/")
-                encoded_filename = quote(image_filename, safe="/")
-                static_url = f"/api/v1/files/output/{encoded_relative_path}/images/{encoded_filename}"
+                # 对图片文件名进行 URL 编码
+                encoded_image_filename = quote(image_filename, safe="/")
+                # 构建 API 文件访问 URL（图片目录已规范化为 images/）
+                static_url = f"/api/v1/files/output/{encoded_relative_path}/images/{encoded_image_filename}"
+            else:
+                # 如果路径不匹配，尝试直接拼接
+                logger.warning(f"⚠️  result_path doesn't start with OUTPUT_DIR: {result_path}")
+                encoded_image_filename = quote(image_filename, safe="/")
+                static_url = f"/api/v1/files/output/images/{encoded_image_filename}"
 
-                # 返回替换后的内容
-                if "![" in full_match:
-                    return f"![{alt_text}]({static_url})"
-                else:
-                    return full_match.replace(image_path, static_url)
+            logger.debug(f"📸 Image URL: {static_url}")
+            return static_url, "markdown"
         except Exception as e:
-            logger.error(f"❌ Failed to generate local URL: {e}")
+            logger.error(f"❌ Failed to generate static URL: {e}")
+            return None, None
 
-        return full_match
+    # 1. 处理 Markdown 格式的图片：![alt](path)
+    md_img_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
+
+    def replace_md_image(match):
+        alt_text = match.group(1)
+        image_path = match.group(2)
+
+        new_url, _ = process_image_path(image_path, alt_text)
+        if new_url:
+            return f"![{alt_text}]({new_url})"
+        return match.group(0)
+
+    # 2. 处理 HTML img 标签：<img src="path" ...>
+    html_img_pattern = r'<img\s+([^>]*\s+)?src="([^"]+)"([^>]*)>'
+
+    def replace_html_image(match):
+        before_src = match.group(1) or ""
+        image_path = match.group(2)
+        after_src = match.group(3) or ""
+
+        # 尝试提取 alt 属性
+        alt_match = re.search(r'alt="([^"]*)"', before_src + after_src)
+        alt_text = alt_match.group(1) if alt_match else "Image"
+
+        new_url, format_type = process_image_path(image_path, alt_text)
+        if new_url:
+            # 保持 HTML 格式
+            return f'<img {before_src}src="{new_url}"{after_src}>'
+        return match.group(0)
 
     try:
-        # 匹配 Markdown 和 HTML 图片
-        md_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
-        html_pattern = r'<img\s+([^>]*\s+)?src="([^"]+)"([^>]*)>'
-
-        new_content = re.sub(md_pattern, replace_image_path, md_content)
-        new_content = re.sub(html_pattern, replace_image_path, new_content)
+        # 替换所有图片引用
+        new_content = re.sub(md_img_pattern, replace_md_image, md_content)
+        new_content = re.sub(html_img_pattern, replace_html_image, new_content)
         return new_content
     except Exception as e:
         logger.error(f"❌ Failed to process images: {e}")
@@ -198,19 +255,19 @@ async def submit_task(
     enable_keyframe_ocr: bool = Form(False, description="是否启用视频关键帧OCR识别（实验性功能）"),
     ocr_backend: str = Form("paddleocr-vl", description="关键帧OCR引擎: paddleocr-vl"),
     keep_keyframes: bool = Form(False, description="是否保留提取的关键帧图像"),
-    # 音频处理专用参数
-    enable_speaker_diarization: bool = Form(
-        False, description="是否启用说话人分离（音频多说话人识别，需要额外下载 Paraformer 模型）"
-    ),
     # 水印去除专用参数
     remove_watermark: bool = Form(False, description="是否启用水印去除（支持 PDF/图片）"),
     watermark_conf_threshold: float = Form(0.35, description="水印检测置信度阈值（0.0-1.0，推荐 0.35）"),
     watermark_dilation: int = Form(10, description="水印掩码膨胀大小（像素，推荐 10）"),
-    # Office 文件转 PDF 参数
-    convert_office_to_pdf: bool = Form(
-        False,
-        description="是否将 Office 文件转换为 PDF 后再处理（图片提取更完整，但速度较慢）"
-    ),
+    # [新增] PaddleOCR-VL 专用参数
+    use_doc_orientation_classify: bool = Form(False, description="[PaddleOCR] 启用文档方向矫正 (针对旋转文档)"),
+    use_doc_unwarping: bool = Form(False, description="[PaddleOCR] 启用文档扭曲矫正 (针对弯曲/折痕文档)"),
+    use_seal_recognition: bool = Form(False, description="[PaddleOCR] 启用印章识别"),
+    use_chart_recognition: bool = Form(False, description="[PaddleOCR] 启用图表识别"),
+    use_ocr_for_image_block: bool = Form(False, description="[PaddleOCR] 是否对图片块进行OCR"),
+    merge_tables: bool = Form(True, description="[PaddleOCR] 合并跨页表格"),
+    relevel_titles: bool = Form(True, description="[PaddleOCR] 智能识别标题层级"),
+    layout_shape_mode: str = Form("auto", description="[PaddleOCR] 检测框形状: auto/rect/quad/poly"),
     # 认证依赖
     current_user: User = Depends(require_permission(Permission.TASK_SUBMIT)),
 ):
@@ -222,13 +279,7 @@ async def submit_task(
     """
     try:
         # 创建共享的上传目录（Backend 和 Worker 都能访问）
-        upload_path_env = os.getenv("UPLOAD_PATH")
-        if upload_path_env:
-            upload_dir = Path(upload_path_env)
-        else:
-            # Docker 环境: /app/uploads
-            # 本地环境: ./data/uploads
-            upload_dir = PROJECT_ROOT / "data" / "uploads"
+        upload_dir = Path("/app/uploads")
         upload_dir.mkdir(parents=True, exist_ok=True)
 
         # 生成唯一的文件名（避免冲突）
@@ -243,35 +294,37 @@ async def submit_task(
                     break
                 temp_file.write(chunk)
 
-        # 构建处理选项
-        options = {
-            "lang": lang,
-            "method": method,
-            "formula_enable": formula_enable,
-            "table_enable": table_enable,
-            # 视频处理参数
-            "keep_audio": keep_audio,
-            "enable_keyframe_ocr": enable_keyframe_ocr,
-            "ocr_backend": ocr_backend,
-            "keep_keyframes": keep_keyframes,
-            # 音频处理参数
-            "enable_speaker_diarization": enable_speaker_diarization,
-            # 水印去除参数
-            "remove_watermark": remove_watermark,
-            "watermark_conf_threshold": watermark_conf_threshold,
-            "watermark_dilation": watermark_dilation,
-            # Office 转 PDF 参数
-            "convert_office_to_pdf": convert_office_to_pdf,
-        }
-
-        # 创建任务（PDF 拆分逻辑由 Worker 处理）
+        # 创建任务 (关联用户)
         task_id = db.create_task(
             file_name=file.filename,
             file_path=str(temp_file_path),
             backend=backend,
-            options=options,
+            options={
+                "lang": lang,
+                "method": method,
+                "formula_enable": formula_enable,
+                "table_enable": table_enable,
+                # 视频处理参数
+                "keep_audio": keep_audio,
+                "enable_keyframe_ocr": enable_keyframe_ocr,
+                "ocr_backend": ocr_backend,
+                "keep_keyframes": keep_keyframes,
+                # 水印去除参数
+                "remove_watermark": remove_watermark,
+                "watermark_conf_threshold": watermark_conf_threshold,
+                "watermark_dilation": watermark_dilation,
+                # [新增] PaddleOCR-VL 参数
+                "use_doc_orientation_classify": use_doc_orientation_classify,
+                "use_doc_unwarping": use_doc_unwarping,
+                "use_seal_recognition": use_seal_recognition,
+                "use_chart_recognition": use_chart_recognition,
+                "use_ocr_for_image_block": use_ocr_for_image_block,
+                "merge_tables": merge_tables,
+                "relevel_titles": relevel_titles,
+                "layout_shape_mode": layout_shape_mode,
+            },
             priority=priority,
-            user_id=current_user.user_id,
+            user_id=current_user.user_id,  # 关联用户
         )
 
         logger.info(f"✅ Task submitted: {task_id} - {file.filename}")
@@ -297,7 +350,7 @@ async def submit_task(
 @app.get("/api/v1/tasks/{task_id}", tags=["任务管理"])
 async def get_task_status(
     task_id: str,
-    upload_images: bool = Query(False, description="【已废弃】图片已自动上传到 RustFS，此参数保留仅用于向后兼容"),
+    upload_images: bool = Query(False, description="是否上传图片到MinIO并替换链接（仅当任务完成时有效）"),
     format: str = Query("markdown", description="返回格式: markdown(默认)/json/both"),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -336,37 +389,7 @@ async def get_task_status(
         "retry_count": task["retry_count"],
         "user_id": task.get("user_id"),
     }
-
-    # 如果是主任务,添加子任务进度信息
-    if task.get("is_parent"):
-        child_count = task.get("child_count", 0)
-        child_completed = task.get("child_completed", 0)
-
-        response["is_parent"] = True
-        response["subtask_progress"] = {
-            "total": child_count,
-            "completed": child_completed,
-            "percentage": round(child_completed / child_count * 100, 1) if child_count > 0 else 0,
-        }
-
-        # 可选: 返回所有子任务状态
-        try:
-            children = db.get_child_tasks(task_id)
-            response["subtasks"] = [
-                {
-                    "task_id": child["task_id"],
-                    "status": child["status"],
-                    "chunk_info": json.loads(child.get("options", "{}")).get("chunk_info"),
-                    "error_message": child.get("error_message"),
-                }
-                for child in children
-            ]
-            logger.info(f"✅ Parent task status: {task['status']} - Progress: {child_completed}/{child_count} subtasks")
-        except Exception as e:
-            logger.warning(f"⚠️  Failed to load subtasks: {e}")
-
-    else:
-        logger.info(f"✅ Task status: {task['status']} - (result_path: {task.get('result_path')})")
+    logger.info(f"✅ Task status: {task['status']} - (result_path: {task['result_path']})")
 
     # 如果任务已完成，尝试返回解析内容
     if task["status"] == "completed":
@@ -416,25 +439,51 @@ async def get_task_status(
                         # 查找图片目录（Worker 已规范化为 images/）
                         image_dir = md_file.parent / "images"
 
-                        # 读取 Markdown 内容（Worker 已自动上传图片到 RustFS）
-                        logger.info(f"📖 Reading markdown file: {md_file}")
-                        with open(md_file, "r", encoding="utf-8") as f:
-                            md_content = f.read()
+                        # 缓存文件路径
+                        cached_md_file = md_file.parent / "result_minio.md" if upload_images else None
 
-                        logger.info(f"✅ Markdown content loaded, length: {len(md_content)} characters")
+                        # 如果请求 MinIO 版本且缓存存在，直接返回缓存
+                        if upload_images and cached_md_file and cached_md_file.exists():
+                            logger.info(f"✅ Found cached MinIO markdown: {cached_md_file.name}")
+                            with open(cached_md_file, "r", encoding="utf-8") as f:
+                                md_content = f.read()
 
-                        # Worker 已自动上传图片到 RustFS 并替换 URL
-                        # 仅在兼容模式下处理（旧任务或 RustFS 失败）
-                        if image_dir.exists() and ("http://" not in md_content and "https://" not in md_content):
-                            logger.warning("⚠️  Images not uploaded to RustFS, using legacy mode")
-                            md_content = process_markdown_images_legacy(md_content, image_dir, task["result_path"])
+                            response["data"]["markdown_file"] = cached_md_file.name
+                            response["data"]["content"] = md_content
+                            response["data"]["images_uploaded"] = True
+                            response["data"]["from_cache"] = True
                         else:
-                            logger.debug("✅ Images already processed by Worker (RustFS URLs)")
+                            # 读取原始 Markdown 内容
+                            logger.info(f"📖 Reading markdown file: {md_file}")
+                            with open(md_file, "r", encoding="utf-8") as f:
+                                md_content = f.read()
 
-                        # 添加 Markdown 相关字段
-                        response["data"]["markdown_file"] = md_file.name
-                        response["data"]["content"] = md_content
-                        response["data"]["has_images"] = image_dir.exists()
+                            logger.info(f"✅ Markdown content loaded, length: {len(md_content)} characters")
+
+                            # 处理图片路径
+                            if image_dir.exists():
+                                logger.info(f"🖼️  Processing images for task {task_id}, upload_images={upload_images}")
+                                logger.info(f"   Image directory: {image_dir}")
+                                md_content = process_markdown_images(
+                                    md_content, image_dir, task["result_path"], upload_images
+                                )
+
+                                # 如果上传到 MinIO，保存缓存文件
+                                if upload_images and cached_md_file:
+                                    try:
+                                        cached_md_file.write_text(md_content, encoding="utf-8")
+                                        logger.info(f"💾 Saved MinIO markdown cache: {cached_md_file.name}")
+                                    except Exception as e:
+                                        logger.warning(f"⚠️  Failed to save cache: {e}")
+                            else:
+                                logger.debug("ℹ️  No images directory found (task may not contain images)")
+
+                            # 添加 Markdown 相关字段
+                            response["data"]["markdown_file"] = md_file.name
+                            response["data"]["content"] = md_content
+                            response["data"]["images_uploaded"] = upload_images
+                            response["data"]["has_images"] = image_dir.exists() if not upload_images else None
+                            response["data"]["from_cache"] = False
 
                     # 如果用户请求 JSON 格式
                     if format in ["json", "both"] and json_files:
@@ -471,6 +520,8 @@ async def get_task_status(
                 logger.warning(f"⚠️  No markdown files found in {result_dir}")
         else:
             logger.error(f"❌ Result directory does not exist: {result_dir}")
+    elif task["status"] == "completed":
+        logger.warning("⚠️  Task completed but result_path is empty")
     else:
         logger.info(f"ℹ️  Task status is {task['status']}, skipping content loading")
 
@@ -652,21 +703,11 @@ async def list_engines():
         "format": [],
         "office": [
             {
-                "name": "MarkItDown (快速)",
-                "value": "auto",
-                "description": "Office 文档和文本文件转换引擎（快速但图片提取可能不完整）",
+                "name": "markitdown",
+                "display_name": "MarkItDown",
+                "description": "Office 文档和文本文件转换引擎",
                 "supported_formats": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".html", ".txt", ".csv"],
-                "features": ["文本提取", "基础格式保留", "图片提取（DOCX）"],
-                "note": "推荐启用 convert_office_to_pdf 参数以获得更好的图片提取效果"
             },
-            {
-                "name": "LibreOffice + MinerU (完整)",
-                "value": "auto",
-                "description": "将 Office 文件转为 PDF 后使用 MinerU 处理（慢但图片提取完整）",
-                "supported_formats": [".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt"],
-                "features": ["完整格式保留", "完整图片提取", "表格识别", "公式识别"],
-                "requirement": "需要设置 convert_office_to_pdf=true"
-            }
         ],
     }
 
@@ -807,6 +848,7 @@ async def serve_output_file(file_path: str):
 
 logger.info(f"📁 File service mounted: /v1/files/output -> {OUTPUT_DIR}")
 logger.info("   Frontend can access images via: /api/v1/files/output/{task_id}/images/xxx.jpg (Nginx will strip /api/)")
+
 
 if __name__ == "__main__":
     # 从环境变量读取端口，默认为8000
