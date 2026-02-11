@@ -596,7 +596,10 @@ class MinerUWorkerAPI(ls.LitAPI):
                 ):
                     raise ValueError("PaddleOCR-VL-VLLM engine is not available")
                 logger.info(f"🔍 Processing with PaddleOCR-VL-VLLM: {file_path}")
+                
+                # [关键修改] 将 options 传递给 parse 方法，以支持所有高级参数
                 result = self._process_with_paddleocr_vl_vllm(file_path, options)
+                
             # 6. 用户指定了 MinerU Pipeline
             elif backend == "pipeline":
                 if not MINERU_PIPELINE_AVAILABLE:
