@@ -4,9 +4,7 @@
 name: tianshu
 
 services:
-  # ============================================================================
-  # Redis (高性能任务队列 - 可选)
-  # ============================================================================
+  # ... (Redis, RustFS, VLLM Service 保持不变) ...
   redis:
     image: redis:7-alpine
     container_name: tianshu-redis
@@ -31,9 +29,6 @@ services:
     networks:
       - tianshu-network
 
-  # ============================================================================
-  # RustFS Object Storage (S3 Compatible)
-  # ============================================================================
   rustfs:
     image: rustfs/rustfs:latest
     container_name: tianshu-rustfs
@@ -59,15 +54,10 @@ services:
     networks:
       - tianshu-network
 
-  # ============================================================================
-  # [新增] VLLM Service (用于 PaddleOCR-VL)
-  # ============================================================================
   vllm-service:
     image: tianshu-backend:latest
     container_name: tianshu-vllm
     restart: unless-stopped
-    # 启动 VLLM API Server
-    # 请确保宿主机的 ./models/PaddleOCR-VL-vllm 目录存在且包含模型文件
     command: >
       python3 -m vllm.entrypoints.openai.api_server
       --model /app/models/PaddleOCR-VL-vllm
@@ -82,7 +72,6 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
-      # 指定 VLLM 使用的 GPU，例如使用第 0 号卡
       - CUDA_VISIBLE_DEVICES=0
     deploy:
       resources:
@@ -116,9 +105,14 @@ services:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./models:/app/models:rw
+      # [新增] 映射宿主机的 .paddleocr 目录，避免重复下载模型
+      - ./models/.paddleocr:/root/.paddleocr:rw
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/huggingface_cache:/root/.cache/huggingface:rw
       - ./models/modelscope_cache:/root/.cache/modelscope:rw
+      # [修正] 确保 /app/uploads 和 /app/data/uploads 都指向同一个宿主机目录
+      # 这样无论代码用哪个路径，都能访问到同一份文件
+      - ./data/uploads:/app/uploads:rw
       - ./data/uploads:/app/data/uploads:rw
       - ./data/output:/app/data/output:rw
       - ./logs/backend:/app/logs:rw
@@ -139,7 +133,8 @@ services:
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-0}
       - MODEL_PATH=/app/models
       - OUTPUT_PATH=/app/data/output
-      - UPLOAD_PATH=/app/data/uploads
+      # [建议] 明确指定上传路径为 /app/uploads，匹配之前的报错路径
+      - UPLOAD_PATH=/app/uploads
       - DATABASE_PATH=${DATABASE_PATH:-/app/data/db/mineru_tianshu.db}
       - RUSTFS_ENABLED=${RUSTFS_ENABLED:-true}
       - RUSTFS_ENDPOINT=${RUSTFS_ENDPOINT:-rustfs:9000}
@@ -173,7 +168,6 @@ services:
       - tianshu-network
     depends_on:
       - rustfs
-      # 移除了 - worker，避免依赖循环
 
   # ============================================================================
   # LitServe GPU Worker
@@ -182,7 +176,6 @@ services:
     image: tianshu-backend:latest
     container_name: tianshu-worker
     restart: unless-stopped
-    # [修改] 更新启动命令，传入 VLLM 参数
     command: 
       - "worker"
       - "python"
@@ -194,9 +187,13 @@ services:
       - "${WORKER_PORT:-8001}:8001"
     volumes:
       - ./models:/app/models:rw
+      # [新增] 映射 .paddleocr，解决模型重复下载问题
+      - ./models/.paddleocr:/root/.paddleocr:rw
       - ./models/paddlex_cache:/root/.paddlex:rw
       - ./models/huggingface_cache:/root/.cache/huggingface:rw
       - ./models/modelscope_cache:/root/.cache/modelscope:rw
+      # [修正] 同时挂载两个路径，确保万无一失
+      - ./data/uploads:/app/uploads:rw
       - ./data/uploads:/app/data/uploads:rw
       - ./data/output:/app/data/output:rw
       - ./logs/worker:/app/logs:rw
@@ -211,7 +208,8 @@ services:
       - WORKER_GPUS=${WORKER_GPUS:-2}
       - MODEL_PATH=/app/models
       - OUTPUT_PATH=/app/data/output
-      - UPLOAD_PATH=/app/data/uploads
+      # [建议] 同样明确指定上传路径
+      - UPLOAD_PATH=/app/uploads
       - DATABASE_PATH=${DATABASE_PATH:-/app/data/db/mineru_tianshu.db}
       - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-4}
       - TIMEOUT=${WORKER_TIMEOUT:-300}
@@ -257,11 +255,9 @@ services:
     depends_on:
       - rustfs
       - backend
-      - vllm-service # [新增] 依赖 vllm-service
+      - vllm-service
 
-  # ============================================================================
-  # MCP Server
-  # ============================================================================
+  # ... (MCP Server, Frontend 保持不变) ...
   mcp-server:
     image: tianshu-backend:latest
     container_name: tianshu-mcp
@@ -291,9 +287,6 @@ services:
     depends_on:
       - backend
 
-  # ============================================================================
-  # Frontend (Vue 3 + Nginx)
-  # ============================================================================
   frontend:
     build:
       context: .
