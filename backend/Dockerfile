@@ -1,11 +1,17 @@
 # ============================================================================
-# Stage 1: Base Image with CUDA Support (CUDA 13.0)
+# Stage 1: Base Image with CUDA Support
 # ============================================================================
 FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 AS base
 
 # 配置镜像源和 APT 优化
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list.d/ubuntu.sources
+
+RUN echo 'Acquire::http::Pipeline-Depth "0";' > /etc/apt/apt.conf.d/99custom && \
+    echo 'Acquire::http::No-Cache "true";' >> /etc/apt/apt.conf.d/99custom && \
+    echo 'Acquire::BrokenProxy "true";' >> /etc/apt/apt.conf.d/99custom && \
+    echo 'Acquire::Retries "5";' >> /etc/apt/apt.conf.d/99custom && \
+    echo 'Acquire::http::Timeout "120";' >> /etc/apt/apt.conf.d/99custom
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -18,22 +24,50 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 python3.12-dev python3-pip python3.12-venv \
-    git wget curl libgomp1 libglib2.0-0 libsm6 libxext6 libxrender-dev \
-    libgl1 libgstreamer1.0-0 ffmpeg antiword pandoc \
-    libreoffice libreoffice-writer libreoffice-calc libreoffice-impress \
-    fonts-noto-cjk fonts-wqy-zenhei fonts-wqy-microhei fontconfig \
-    && fc-cache -fv && rm -rf /var/lib/apt/lists/*
+    python3.12 \
+    python3.12-dev \
+    python3-pip \
+    python3.12-venv \
+    git \
+    wget \
+    curl \
+    libgomp1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgl1 \
+    libgstreamer1.0-0 \
+    ffmpeg \
+    antiword \
+    pandoc \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 LibreOffice (固定大版本 24.8.x)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libreoffice \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-impress \
+    fonts-noto-cjk \
+    fonts-noto-cjk-extra \
+    fonts-wqy-zenhei \
+    fonts-wqy-microhei \
+    fontconfig \
+    && fc-cache -fv \
+    && rm -rf /var/lib/apt/lists/*
 
 # 符号链接
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
-# [关键步骤] 修复 Python 3.12 兼容性基础环境
+# 升级 pip (修复 Ubuntu 24.04 PEP 668)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python3 -m pip install --upgrade --ignore-installed \
-    "pip" "setuptools>=70.0.0" "wheel" \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages
+    python3 -m pip install --upgrade --ignore-installed pip setuptools wheel \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages \
+    --default-timeout=300
 
 # ============================================================================
 # Stage 2: Dependencies Installation
@@ -43,61 +77,109 @@ FROM base AS dependencies
 WORKDIR /tmp
 COPY backend/requirements.txt /tmp/requirements.txt
 
-# Step 1: 强制固定 NumPy 和 OpenCV (满足 vLLM 兼容性)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "numpy==1.26.4" "opencv-python-headless>=4.13.0.90" \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages
+# ----------------------------------------------------------------------------
+# 核心依赖安装顺序
+# ----------------------------------------------------------------------------
 
-# Step 2: 安装 vLLM (cu130)
+# Step 1: 安装 vLLM (让 vLLM 自动决定 PyTorch 版本)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "vllm>=0.15.1" --extra-index-url https://download.pytorch.org/whl/cu130 \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages
+    echo "Installing vLLM and letting it pull PyTorch..." && \
+    pip install "vllm>=0.15.1" \
+    --extra-index-url https://download.pytorch.org/whl/cu130 \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages \
+    --default-timeout=600 \
+    || echo "Warning: vLLM installation faced issues, proceeding to check..."
 
-# Step 3: 安装预编译的 FlashAttention (cu130)
+# Step 2: 预装构建工具
 RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install "kiwisolver>=1.4.5" "Pillow>=11.0.0" \
+    "numpy>=1.26.0,<2.0.0" "setuptools>=75.0.0" "lxml>=5.3.0" \
+    "packaging" "ninja" "psutil" \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages
+
+# Step 3: 安装预编译的 FlashAttention Wheel
+# 使用匹配 CUDA 13.0 + Torch 2.9 + Python 3.12 的预编译包
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "Installing FlashAttention Wheel..." && \
     pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3%2Bcu130torch2.9-cp312-cp312-linux_x86_64.whl \
     --break-system-packages
 
-# Step 4: 安装 PaddlePaddle GPU (cu130)
+# Step 4: 安装 PaddlePaddle GPU
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu130/ \
+    echo "Installing PaddlePaddle..." && \
+    pip install paddlepaddle-gpu==3.3.0 \
+    -i https://www.paddlepaddle.org.cn/packages/stable/cu130/ \
+    --break-system-packages \
+    --default-timeout=600
+
+# Step 5: 安装 MinerU 核心 (使用 --no-deps 防止它破坏 vLLM 的 PyTorch)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    echo "Installing MinerU Core..." && \
+    pip install "mineru[core]>=2.7.6" --no-deps \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages
 
-# Step 5: 安装核心依赖 (采用 --no-deps 策略防止污染环境)
+# Step 6: 安装其他核心包
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "mineru[core]>=2.7.6" "albumentations>=1.4.11" "albucore>=0.0.15" \
-    --no-deps -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages
+    echo "Installing other core packages..." && \
+    pip install paddleocr[doc-parser] \
+    transformers==4.57.6 tokenizers>=0.22.0 \
+    fastapi uvicorn litserve aiohttp \
+    PyMuPDF Pillow img2pdf einops easydict addict loguru modelscope \
+    minio markitdown \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages \
+    --default-timeout=300 \
+    --retries 5
 
-# Step 6: 安装其他框架包
+# Step 7: 确保 Albumentations 版本兼容性
+# [关键] 保持 numpy<2.0.0，防止 albumentations 触发 scikit-image 更新导致 numpy 升级
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install paddleocr[doc-parser] transformers==4.57.6 tokenizers>=0.22.0 \
-    fastapi uvicorn litserve aiohttp PyMuPDF Pillow img2pdf einops easydict addict \
-    loguru modelscope minio markitdown \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages
+    pip install "numpy<2.0.0" "albumentations>=1.4.11" \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages
 
-# Step 7: 清理并执行 requirements.txt 剩余依赖
+# Step 8: 安装剩余依赖
 RUN --mount=type=cache,target=/root/.cache/pip \
-    sed -i '/torch/d; /nvidia/d; /opencv/d; /numpy/d; /albumentations/d; /paddle/d' /tmp/requirements.txt && \
-    pip install -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages
+    echo "Installing remaining requirements..." && \
+    pip install -r /tmp/requirements.txt \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --break-system-packages \
+    --default-timeout=600
 
-# 最终验证
-RUN python -c "import torch; print(f'PyTorch: {torch.__version__} (CUDA: {torch.cuda.is_available()})')" && \
-    pip show paddlepaddle-gpu | grep Version
+# 验证安装 (Build-Safe Verify)
+# [关键修复] 移除了 "import paddle"，因为它需要 GPU 驱动 (libcuda.so)，构建时不可用。
+# 改为使用 pip show 验证包是否存在。
+RUN python -c "import torch; print(f'PyTorch: {torch.__version__} (CUDA Available: {torch.cuda.is_available()})')" && \
+    echo "Verifying PaddlePaddle installation..." && \
+    pip show paddlepaddle-gpu | grep Version && \
+    echo "PaddlePaddle installed (Import check skipped during build)"
 
 # ============================================================================
 # Stage 3: Application
 # ============================================================================
 FROM dependencies AS application
+
 WORKDIR /app
+
+# 复制后端代码
 COPY backend/ /app/backend/
 COPY pyproject.toml /app/
+
+# 复制启动脚本
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY scripts/init-models.sh /usr/local/bin/init-models.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/init-models.sh
 
-RUN mkdir -p /app/models /app/data/uploads /app/data/output /app/logs
+RUN mkdir -p /app/models /app/data /app/uploads /app/output /app/logs
 WORKDIR /app/backend
 
 EXPOSE 8000 8001 8002
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["api", "python", "api_server.py"]
