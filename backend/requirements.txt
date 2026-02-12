@@ -3,7 +3,7 @@
 # ============================================================================
 paddlepaddle-gpu==3.3.0
 protobuf==3.20.3
-# Note: PyTorch & FlashAttention are managed by Dockerfile (vLLM installation)
+# FlashAttention is installed via Wheel in Dockerfile
 
 # ============================================================================
 # MinerU & OCR Core
@@ -43,9 +43,8 @@ Pillow>=11.0.0
 img2pdf>=0.5.0
 pikepdf>=9.0.0
 
-# [关键版本控制] 适配 doclayout-yolo 0.0.4 和 vLLM 需求
+# [关键版本控制] 适配 doclayout-yolo 0.0.4
 albumentations>=1.4.11
-
 # [关键版本控制] 防止拉取 Numpy 2.0
 scikit-image>=0.25.0,<0.26.0
 
@@ -60,9 +59,8 @@ funasr>=1.2.7
 ffmpeg-python>=0.2.0
 soundfile>=0.12.0
 imagehash>=4.3.0
-
-# [关键修正] 使用 headless 版以避免 GUI 依赖冲突，且版本需 >=4.13.0 以兼容 vLLM
-opencv-python-headless>=4.13.0
+# [修正] 使用标准版以配合 MinerU (系统层已安装 libgl1)
+opencv-python>=4.10.0
 
 # [关键版本控制] 严防 Numpy 2.0 (Numba/vLLM 兼容性)
 numpy>=1.26.0,<2.0.0
