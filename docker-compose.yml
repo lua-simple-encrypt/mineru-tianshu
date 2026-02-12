@@ -4,7 +4,9 @@
 name: tianshu
 
 services:
-  # ... (Redis, RustFS, VLLM Service 保持不变) ...
+  # ============================================================================
+  # Redis (高性能任务队列 - 可选)
+  # ============================================================================
   redis:
     image: redis:7-alpine
     container_name: tianshu-redis
@@ -29,6 +31,9 @@ services:
     networks:
       - tianshu-network
 
+  # ============================================================================
+  # RustFS Object Storage (S3 Compatible)
+  # ============================================================================
   rustfs:
     image: rustfs/rustfs:latest
     container_name: tianshu-rustfs
@@ -54,13 +59,18 @@ services:
     networks:
       - tianshu-network
 
+  # ============================================================================
+  # VLLM Service (用于 PaddleOCR-VL)
+  # ============================================================================
   vllm-service:
     image: tianshu-backend:latest
     container_name: tianshu-vllm
     restart: unless-stopped
+    # [关键修改] 覆盖默认 entrypoint，直接运行 python
+    entrypoint: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+    # [关键修改] 指向 worker 自动下载的模型路径
     command: >
-      python3 -m vllm.entrypoints.openai.api_server
-      --model /app/models/PaddleOCR-VL-vllm
+      --model /root/.paddlex/official_models/PaddleOCR-VL-1.5
       --served-model-name paddleocr-vl
       --trust-remote-code
       --port 8000
@@ -68,11 +78,14 @@ services:
       --gpu-memory-utilization 0.4
       --max-model-len 8192
     volumes:
-      - ./models:/app/models:rw
+      # [关键] 挂载宿主机的 paddlex 缓存到容器内的 /root/.paddlex
+      # 这样 vllm 就能找到 worker 下载的模型文件
+      - ./models/paddlex_cache:/root/.paddlex:rw
       - /etc/localtime:/etc/localtime:ro
     environment:
       - TZ=Asia/Shanghai
       - CUDA_VISIBLE_DEVICES=0
+      - HF_ENDPOINT=https://hf-mirror.com
     deploy:
       resources:
         reservations:
@@ -87,7 +100,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 120s
 
   # ============================================================================
   # Backend API Server
@@ -257,7 +270,9 @@ services:
       - backend
       - vllm-service
 
-  # ... (MCP Server, Frontend 保持不变) ...
+  # ============================================================================
+  # MCP Server
+  # ============================================================================
   mcp-server:
     image: tianshu-backend:latest
     container_name: tianshu-mcp
@@ -287,6 +302,9 @@ services:
     depends_on:
       - backend
 
+  # ============================================================================
+  # Frontend (Vue 3 + Nginx)
+  # ============================================================================
   frontend:
     build:
       context: .
