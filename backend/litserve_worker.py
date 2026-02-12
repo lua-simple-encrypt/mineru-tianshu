@@ -933,7 +933,7 @@ class MinerUWorkerAPI(ls.LitAPI):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 处理文件（parse 方法需要 output_path）
-        # [修改] 关键：解包 options，将前端传来的参数全部传递给 parse 方法
+        # [修改] 关键：解包 options，将前端传来的参数全部传递给 parse 方法，支持高级功能
         result = self.paddleocr_vl_vllm_engine.parse(
             file_path, 
             output_path=str(output_dir),
@@ -1683,7 +1683,7 @@ if __name__ == "__main__":
         "--paddleocr-vl-vllm-api-list",
         type=parse_list_arg,
         default=[],
-        help='PaddleOCR VL VLLM API 列表（Python list 字面量格式，如: \'["http://127.0.0.1:8000/v1", "http://127.0.0.1:8001/v1"]\'）',
+        help='PaddleOCR VL VLLM API 列表（Python list 字面量格式,如: \'["http://127.0.0.1:8000/v1", "http://127.0.0.1:8001/v1"]\'）',
     )
     args = parser.parse_args()
 
