@@ -1,5 +1,5 @@
 # ============================================================================
-# Stage 1: Base Image with CUDA Support
+# Stage 1: Base Image with CUDA Support (CUDA 13.0)
 # ============================================================================
 FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 AS base
 
@@ -62,7 +62,7 @@ RUN apt-get update && \
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
-# 升级 pip (修复 Ubuntu 24.04 PEP 668)
+# 升级 pip
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --upgrade --ignore-installed pip setuptools wheel \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -81,9 +81,10 @@ COPY backend/requirements.txt /tmp/requirements.txt
 # 核心依赖安装顺序
 # ----------------------------------------------------------------------------
 
-# Step 1: 安装 vLLM (让 vLLM 自动决定 PyTorch 版本)
+# Step 1: 安装 vLLM (最关键依赖，由此确定 PyTorch 版本为 cu130)
+# [关键] 指定 --extra-index-url 为 cu130，确保拉取正确的 PyTorch
 RUN --mount=type=cache,target=/root/.cache/pip \
-    echo "Installing vLLM and letting it pull PyTorch..." && \
+    echo "Installing vLLM and letting it pull PyTorch (cu130)..." && \
     pip install "vllm>=0.15.1" \
     --extra-index-url https://download.pytorch.org/whl/cu130 \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -100,13 +101,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --break-system-packages
 
 # Step 3: 安装预编译的 FlashAttention Wheel
-# 使用匹配 CUDA 13.0 + Torch 2.9 + Python 3.12 的预编译包
+# [关键] 使用匹配 CUDA 13.0 + Torch 2.9 的版本
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing FlashAttention Wheel..." && \
     pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3%2Bcu130torch2.9-cp312-cp312-linux_x86_64.whl \
     --break-system-packages
 
 # Step 4: 安装 PaddlePaddle GPU
+# [关键] 指定 paddlepaddle 仓库的 cu130 目录
 RUN --mount=type=cache,target=/root/.cache/pip \
     echo "Installing PaddlePaddle..." && \
     pip install paddlepaddle-gpu==3.3.0 \
@@ -134,28 +136,34 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --default-timeout=300 \
     --retries 5
 
-# Step 7: 确保 Albumentations 版本兼容性
-# [关键] 保持 numpy<2.0.0，防止 albumentations 触发 scikit-image 更新导致 numpy 升级
+# Step 7: 解决 OpenCV 版本冲突
+# [关键] vLLM 需要 opencv-python-headless>=4.13，显式安装以满足需求
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "numpy<2.0.0" "albumentations>=1.4.11" \
+    pip install "numpy<2.0.0" "albumentations>=1.4.11" "opencv-python-headless>=4.13.0" \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages
 
-# Step 8: 安装剩余依赖
+# Step 8: 安装剩余依赖 (剔除 torch 相关)
+# [关键修正] 从 requirements.txt 中剔除 torch, torchvision, torchaudio
+# 防止 pip install -r 再次拉取不兼容的 PyPI 版本 (如 cu128 或 cpu)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    echo "Installing remaining requirements..." && \
+    echo "Processing requirements.txt and installing..." && \
+    # 使用 sed 删除相关行
+    sed -i '/^torch/d' /tmp/requirements.txt && \
+    sed -i '/^torchvision/d' /tmp/requirements.txt && \
+    sed -i '/^torchaudio/d' /tmp/requirements.txt && \
+    # 打印处理后的文件确认
+    cat /tmp/requirements.txt | grep -E "torch|vision|audio" || echo "Torch related packages removed from requirements.txt" && \
     pip install -r /tmp/requirements.txt \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --break-system-packages \
     --default-timeout=600
 
-# 验证安装 (Build-Safe Verify)
-# [关键修复] 移除了 "import paddle"，因为它需要 GPU 驱动 (libcuda.so)，构建时不可用。
-# 改为使用 pip show 验证包是否存在。
+# 验证安装
 RUN python -c "import torch; print(f'PyTorch: {torch.__version__} (CUDA Available: {torch.cuda.is_available()})')" && \
     echo "Verifying PaddlePaddle installation..." && \
     pip show paddlepaddle-gpu | grep Version && \
-    echo "PaddlePaddle installed (Import check skipped during build)"
+    echo "PaddlePaddle installed"
 
 # ============================================================================
 # Stage 3: Application
